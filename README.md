@@ -1,6 +1,6 @@
 # VTX Platform — Autonomous Development Pipeline
 
-[![CI Pipeline](https://github.com/vtxsolution/vtx/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
+[![CI Pipeline](https://github.com/hvantoan/vtx/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.23%2B-blue)](apps/backend/go.mod)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black)](apps/web)
 [![Temporal](https://img.shields.io/badge/Temporal-1.26-purple)](infra/compose/docker-compose.yml)
