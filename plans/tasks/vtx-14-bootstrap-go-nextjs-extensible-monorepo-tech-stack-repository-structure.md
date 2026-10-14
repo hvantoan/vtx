@@ -1,6 +1,6 @@
 # Phân tích task VTX-14 — Khởi tạo Monorepo Go + Next.js và cấu trúc Tech Stack nền tảng
 
-> Generated: 2026-10-14 | Input: https://vtxsolution.atlassian.net/browse/VTX-14 | Trạng thái ticket: To Do  
+> Generated: 2026-10-14 | Input: https://vtxsolution.atlassian.net/browse/VTX-14 | Trạng thái ticket: In Review  
 > Nguồn: Jira MCP (`jira_vtx_jira_get_issue`), SPEC-001 v1.2 từ description của VTX-14, parent epic VTX-1; kiểm tra workspace cục bộ `/home/vif/workspace/vtx` (thư mục rỗng, chưa khởi tạo git hay source code)
 
 ## 1. Tóm tắt
@@ -12,7 +12,7 @@ Task VTX-14 đảm nhiệm việc khởi tạo nền tảng (bootstrap) cho mộ
 | Mục | Giá trị |
 |---|---|
 | Type | Task |
-| Status | To Do |
+| Status | In Review |
 | Priority | High |
 | Assignee | Hồ Văn Toàn |
 | Reporter | Hồ Văn Toàn |
