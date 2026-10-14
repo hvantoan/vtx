@@ -107,13 +107,13 @@ typecheck-agent:
 # Database Migrations (Goose)
 # ------------------------------------------------------------------------------
 migrate-up:
-	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:5432/vtx_platform?sslmode=disable}" up
+	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:49432/vtx_platform?sslmode=disable}" up
 
 migrate-down:
-	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:5432/vtx_platform?sslmode=disable}" down
+	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:49432/vtx_platform?sslmode=disable}" down
 
 migrate-status:
-	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:5432/vtx_platform?sslmode=disable}" status
+	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:49432/vtx_platform?sslmode=disable}" status
 
 # ------------------------------------------------------------------------------
 # Docker Compose Management

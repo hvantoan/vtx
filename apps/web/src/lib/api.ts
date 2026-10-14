@@ -5,7 +5,7 @@ import type {
   WorkerStatusResponse,
 } from "../types/api";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:49080";
 
 export async function fetchHealth(): Promise<{ data: HealthResponse | null; error: string | null; latencyMs: number }> {
   const start = performance.now();

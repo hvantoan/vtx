@@ -100,7 +100,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:49080";
     let eventSource: EventSource | null = null;
 
     try {
@@ -343,7 +343,7 @@ export default function DashboardPage() {
                   <span className="font-semibold text-white text-sm">Temporal Orchestration Server</span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  gRPC: <span className="font-mono text-slate-300">localhost:7233</span> (Web UI @ :8080)
+                  gRPC: <span className="font-mono text-slate-300">localhost:49233</span> (Web UI @ :49234)
                 </p>
                 {ready?.dependencies?.temporal?.error && (
                   <p className="text-xs text-amber-400 mt-2 font-mono">

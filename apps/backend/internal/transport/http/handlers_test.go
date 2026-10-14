@@ -28,7 +28,7 @@ func (m *mockDependency) Ping(ctx context.Context) (time.Duration, error) {
 
 func setupTestServer(db transporthttp.DependencyChecker, temporal transporthttp.DependencyChecker) (http.Handler, *config.Config) {
 	cfg := &config.Config{
-		Port:          "8080",
+		Port:          "49080",
 		Env:           "test",
 		AuthToken:     "test-secret-token",
 		TemporalQueue: "test-queue",

@@ -185,7 +185,7 @@ One row per entry of `ReadyResponse.dependencies` (`database`, `temporal`).
 ```
 ┌──────────────────────────────────────────────────────┐
 │ ● PostgreSQL          UP        2.4ms   pgx/v5 pool  │
-│   localhost:5432/vtx_platform        (endpoint, mono) │
+│   postgres:5432/vtx_platform         (endpoint, mono) │
 └──────────────────────────────────────────────────────┘
 ```
 

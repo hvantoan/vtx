@@ -81,8 +81,8 @@ make compose-up
 
 Verify service readiness:
 ```bash
-./infra/scripts/wait-for-it.sh localhost 5432 30
-./infra/scripts/wait-for-it.sh localhost 7233 30
+./infra/scripts/wait-for-it.sh localhost 49432 30
+./infra/scripts/wait-for-it.sh localhost 49233 30
 ```
 
 ### Step 4: Run Database Migrations
@@ -104,7 +104,7 @@ Run backend API:
 Run Next.js Web Dashboard:
 ```bash
 pnpm --filter @vtx/web dev
-# Access cockpit at http://localhost:3000
+# Access cockpit at http://localhost:49030
 ```
 
 ---

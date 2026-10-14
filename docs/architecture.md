@@ -57,7 +57,7 @@
 │ infra/compose                                                                   │
 │   ├── postgres:17-alpine (Databases: vtx_platform, temporal)                    │
 │   ├── temporalio/auto-setup:1.26.2 (Temporal Server)                            │
-│   └── temporalio/ui:2.34.0 (Temporal Web UI @ :8080)                            │
+│   └── temporalio/ui:2.34.0 (Temporal Web UI @ :49234)                           │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 

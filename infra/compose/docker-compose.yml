@@ -1,3 +1,5 @@
+name: vtx
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -8,7 +10,7 @@ services:
       POSTGRES_PASSWORD: vtx_password
       POSTGRES_DB: vtx_platform
     ports:
-      - "5432:5432"
+      - "${VTX_POSTGRES_PORT:-49432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../postgres/init-dbs.sql:/docker-entrypoint-initdb.d/01-init-dbs.sql:ro
@@ -26,16 +28,15 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - DB=postgresql
+      - DB=postgres12_pgx
       - DB_PORT=5432
       - POSTGRES_USER=vtx_user
       - POSTGRES_PWD=vtx_password
       - POSTGRES_SEEDS=postgres
-      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
       - BIND_ON_IP=0.0.0.0
       - TEMPORAL_CLI_ADDRESS=temporal:7233
     ports:
-      - "7233:7233"
+      - "${VTX_TEMPORAL_PORT:-49233}:7233"
     healthcheck:
       test: ["CMD", "temporal", "operator", "cluster", "health"]
       interval: 10s
@@ -50,9 +51,9 @@ services:
       - temporal
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+      - TEMPORAL_CORS_ORIGINS=http://localhost:${VTX_WEB_PORT:-49030}
     ports:
-      - "8233:8080"
+      - "${VTX_TEMPORAL_UI_PORT:-49234}:8080"
 
   backend:
     build:
@@ -66,7 +67,7 @@ services:
       temporal:
         condition: service_healthy
     environment:
-      - PORT=8080
+      - PORT=49080
       - API_HOST=0.0.0.0
       - APP_ENV=development
       - DATABASE_URL=postgres://vtx_user:vtx_password@postgres:5432/vtx_platform?sslmode=disable
@@ -75,21 +76,21 @@ services:
       - TEMPORAL_TASK_QUEUE=vtx-task-queue
       - API_AUTH_TOKEN=vtx-dev-secret-token-change-in-production
     ports:
-      - "8080:8080"
+      - "${VTX_API_PORT:-49080}:49080"
 
   web:
     build:
-      context: ../../apps/web
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: apps/web/Dockerfile
     container_name: vtx-web
     restart: unless-stopped
     depends_on:
       - backend
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_API_URL=http://localhost:${VTX_API_PORT:-49080}
       - NEXT_PUBLIC_APP_ENV=development
     ports:
-      - "3000:3000"
+      - "${VTX_WEB_PORT:-49030}:49030"
 
 volumes:
   postgres_data:

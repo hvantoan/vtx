@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -109,15 +110,19 @@ func runDoctor() {
 
 	// 7. Check Database Connectivity
 	cfg := config.Load()
-	fmt.Printf("%-20s", "PostgreSQL (5432):")
-	if checkTCP("localhost:5432", 1*time.Second) {
-		fmt.Println(" [OK] Connected to localhost:5432")
+	dbAddr := "localhost:49432"
+	if u, err := url.Parse(cfg.DatabaseURL); err == nil && u.Host != "" {
+		dbAddr = u.Host
+	}
+	fmt.Printf("%-20s", "PostgreSQL:")
+	if checkTCP(dbAddr, 1*time.Second) {
+		fmt.Printf(" [OK] Connected to %s\n", dbAddr)
 	} else {
-		fmt.Println(" [INFO] Not listening on localhost:5432 (start with 'make compose-up')")
+		fmt.Printf(" [INFO] Not listening on %s (start with 'make compose-up')\n", dbAddr)
 	}
 
 	// 8. Check Temporal Connectivity
-	fmt.Printf("%-20s", "Temporal (7233):")
+	fmt.Printf("%-20s", "Temporal:")
 	if checkTCP(cfg.TemporalHostPort, 1*time.Second) {
 		fmt.Printf(" [OK] Connected to %s\n", cfg.TemporalHostPort)
 	} else {

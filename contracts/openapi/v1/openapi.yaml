@@ -6,7 +6,7 @@ info:
   license:
     name: Proprietary
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost:49080
     description: Local development server
 paths:
   /health:
