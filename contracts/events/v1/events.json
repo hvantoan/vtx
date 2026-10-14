@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VTX Platform Events Schema",
+  "description": "Event formats emitted by the VTX platform over SSE and internal message brokers",
+  "version": "1.0.0",
+  "definitions": {
+    "PlatformEvent": {
+      "type": "object",
+      "required": ["id", "type", "timestamp", "source", "data"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "system.heartbeat",
+            "task.created",
+            "task.started",
+            "task.progress",
+            "task.completed",
+            "task.failed",
+            "worker.status_changed"
+          ]
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "source": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  }
+}

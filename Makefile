@@ -1,0 +1,138 @@
+# ==============================================================================
+# VTX Monorepo Makefile
+# Sole entrypoint for building, testing, linting, and running services.
+# ==============================================================================
+
+SHELL := /usr/bin/env bash
+export GOWORK := off
+
+BACKEND_DIR := apps/backend
+BIN_DIR := $(BACKEND_DIR)/bin
+
+.PHONY: all help doctor dev build build-backend build-web build-agent test test-backend test-web test-agent test-boundaries lint vet typecheck migrate-up migrate-down compose-up compose-down compose-logs clean
+
+all: build
+
+help:
+	@echo "VTX Monorepo Developer Commands:"
+	@echo "  make doctor            - Check local developer environment and toolchain"
+	@echo "  make dev               - Run local development environment"
+	@echo "  make build             - Build all apps (backend, web, agent-runtime)"
+	@echo "  make build-backend     - Compile Go binaries (api, worker, cli)"
+	@echo "  make build-web         - Build Next.js application"
+	@echo "  make build-agent       - Compile Node.js agent runtime"
+	@echo "  make test              - Run all test suites across the monorepo"
+	@echo "  make test-backend      - Run Go tests with race detector"
+	@echo "  make test-web          - Run Next.js frontend tests"
+	@echo "  make test-agent        - Run Agent runtime tests"
+	@echo "  make test-boundaries   - Run monorepo architectural boundary checks"
+	@echo "  make lint              - Lint all projects"
+	@echo "  make vet               - Run go vet on backend"
+	@echo "  make typecheck         - Typecheck TypeScript projects"
+	@echo "  make compose-up        - Start PostgreSQL and Temporal with Docker Compose"
+	@echo "  make compose-down      - Stop Docker Compose services"
+	@echo "  make clean             - Remove build artifacts and temporary files"
+
+# ------------------------------------------------------------------------------
+# Diagnostics & Doctor
+# ------------------------------------------------------------------------------
+doctor:
+	@go -C $(BACKEND_DIR) run ./cmd/cli doctor
+
+# ------------------------------------------------------------------------------
+# Build Targets
+# ------------------------------------------------------------------------------
+build: build-backend build-web build-agent
+
+build-backend:
+	@mkdir -p $(BIN_DIR)
+	@echo "📦 Building Go binaries..."
+	@go -C $(BACKEND_DIR) build -o bin/api ./cmd/api
+	@go -C $(BACKEND_DIR) build -o bin/worker ./cmd/worker
+	@go -C $(BACKEND_DIR) build -o bin/platform ./cmd/cli
+	@echo "✅ Backend binaries built in $(BIN_DIR)"
+
+build-web:
+	@echo "📦 Building Web application..."
+	@pnpm --filter @vtx/web build
+
+build-agent:
+	@echo "📦 Building Agent runtime..."
+	@pnpm --filter @vtx/agent-runtime build
+
+# ------------------------------------------------------------------------------
+# Test Targets
+# ------------------------------------------------------------------------------
+test: test-boundaries test-backend test-agent test-web
+
+test-backend:
+	@echo "🧪 Running Go unit tests..."
+	@go -C $(BACKEND_DIR) test -v -race ./...
+
+test-agent:
+	@echo "🧪 Running Agent runtime tests..."
+	@pnpm --filter @vtx/agent-runtime test
+
+test-web:
+	@echo "🧪 Running Web tests..."
+	@pnpm --filter @vtx/web test
+
+test-boundaries:
+	@./infra/scripts/check-boundaries.sh
+
+# ------------------------------------------------------------------------------
+# Lint & Typecheck
+# ------------------------------------------------------------------------------
+lint: vet lint-web lint-agent
+
+vet:
+	@echo "🔍 Running go vet..."
+	@go -C $(BACKEND_DIR) vet ./...
+
+lint-web:
+	@pnpm --filter @vtx/web lint
+
+lint-agent:
+	@pnpm --filter @vtx/agent-runtime lint
+
+typecheck: typecheck-web typecheck-agent
+
+typecheck-web:
+	@pnpm --filter @vtx/web typecheck
+
+typecheck-agent:
+	@pnpm --filter @vtx/agent-runtime typecheck
+
+# ------------------------------------------------------------------------------
+# Database Migrations (Goose)
+# ------------------------------------------------------------------------------
+migrate-up:
+	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:5432/vtx_platform?sslmode=disable}" up
+
+migrate-down:
+	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:5432/vtx_platform?sslmode=disable}" down
+
+migrate-status:
+	@goose -dir $(BACKEND_DIR)/db/migrations postgres "$${DATABASE_URL:-postgres://vtx_user:vtx_password@localhost:5432/vtx_platform?sslmode=disable}" status
+
+# ------------------------------------------------------------------------------
+# Docker Compose Management
+# ------------------------------------------------------------------------------
+compose-up:
+	@docker compose -f infra/compose/docker-compose.yml up -d
+
+compose-down:
+	@docker compose -f infra/compose/docker-compose.yml down
+
+compose-logs:
+	@docker compose -f infra/compose/docker-compose.yml logs -f
+
+# ------------------------------------------------------------------------------
+# Cleanup
+# ------------------------------------------------------------------------------
+clean:
+	@rm -rf $(BIN_DIR)
+	@rm -rf apps/backend/coverage.out
+	@rm -rf apps/web/.next apps/web/out
+	@rm -rf apps/agent-runtime/dist
+	@echo "🧹 Clean completed."

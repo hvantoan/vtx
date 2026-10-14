@@ -1,0 +1,55 @@
+# ==============================================================================
+# VTX Monorepo .gitignore
+# ==============================================================================
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment & Local secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Go artifacts
+# STRICT CONSTRAINT: NEVER allow go.work or go.work.sum in repository
+go.work
+go.work.sum
+bin/
+dist/
+*.exe
+*.test
+*.prof
+coverage.out
+coverage.html
+
+# Node / JS artifacts
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js build output
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# Temporal & Local Storage
+infra/storage/data/
+.temporal/
+
+# Test & coverage artifacts
+test-results/
+playwright-report/
+blob-report/

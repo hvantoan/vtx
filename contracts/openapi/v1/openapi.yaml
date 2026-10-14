@@ -1,0 +1,218 @@
+openapi: 3.1.0
+info:
+  title: VTX Platform API
+  description: Core backend API for VTX Autonomous Development Pipeline platform.
+  version: 1.0.0
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+paths:
+  /health:
+    get:
+      summary: Liveness Probe
+      description: Returns 200 OK if the HTTP server process is live and responsive.
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Server is live
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /ready:
+    get:
+      summary: Readiness Probe
+      description: Checks connectivity to critical dependencies (PostgreSQL, Temporal Server).
+      operationId: getReady
+      security: []
+      responses:
+        '200':
+          description: All dependencies healthy and ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: One or more dependencies are unhealthy or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+  /api/v1/system/status:
+    get:
+      summary: System Status
+      description: Returns detailed platform runtime metrics, version, and component status.
+      operationId: getSystemStatus
+      security: []
+      responses:
+        '200':
+          description: System status details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatusResponse'
+  /api/v1/events:
+    get:
+      summary: Real-Time SSE Stream
+      description: Establishes a Server-Sent Events stream for platform events, task updates, and system metrics. Requires Bearer authentication.
+      operationId: subscribeEvents
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: SSE stream opened successfully
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Stream of newline-delimited SSE event frames
+        '401':
+          description: Missing or invalid authentication token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/workers:
+    get:
+      summary: Worker Status
+      description: Returns the status of active Temporal workers and agent runtime instances.
+      operationId: getWorkerStatus
+      security: []
+      responses:
+        '200':
+          description: Worker status list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerStatusResponse'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT or API Token
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - uptime_seconds
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+        uptime_seconds:
+          type: number
+          example: 124.5
+    DependencyCheck:
+      type: object
+      required:
+        - status
+        - latency_ms
+      properties:
+        status:
+          type: string
+          enum: [up, down, degraded]
+        latency_ms:
+          type: number
+          example: 2.4
+        error:
+          type:
+            - string
+            - "null"
+    ReadyResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - dependencies
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          properties:
+            database:
+              $ref: '#/components/schemas/DependencyCheck'
+            temporal:
+              $ref: '#/components/schemas/DependencyCheck'
+    SystemStatusResponse:
+      type: object
+      required:
+        - version
+        - commit
+        - environment
+        - go_version
+        - goroutines
+      properties:
+        version:
+          type: string
+          example: 1.0.0
+        commit:
+          type: string
+          example: a1b2c3d
+        environment:
+          type: string
+          example: development
+        go_version:
+          type: string
+          example: go1.25.7
+        goroutines:
+          type: integer
+          example: 14
+        uptime_seconds:
+          type: number
+          example: 3600.0
+    WorkerStatusResponse:
+      type: object
+      required:
+        - status
+        - workers
+      properties:
+        status:
+          type: string
+          example: healthy
+        workers:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - queue
+              - status
+            properties:
+              id:
+                type: string
+                example: temporal-worker-default
+              queue:
+                type: string
+                example: vtx-task-queue
+              status:
+                type: string
+                enum: [running, idle, stopped]
+              active_workflows:
+                type: integer
+                example: 0
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: unauthorized
+        message:
+          type: string
+          example: Invalid or missing authorization header

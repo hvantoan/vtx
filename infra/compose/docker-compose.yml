@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: vtx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vtx_user
+      POSTGRES_PASSWORD: vtx_password
+      POSTGRES_DB: vtx_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../postgres/init-dbs.sql:/docker-entrypoint-initdb.d/01-init-dbs.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vtx_user -d vtx_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  temporal:
+    image: temporalio/auto-setup:1.26.2
+    container_name: vtx-temporal
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=vtx_user
+      - POSTGRES_PWD=vtx_password
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - BIND_ON_IP=0.0.0.0
+      - TEMPORAL_CLI_ADDRESS=temporal:7233
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: vtx-temporal-ui
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8233:8080"
+
+  backend:
+    build:
+      context: ../../apps/backend
+      dockerfile: Dockerfile
+    container_name: vtx-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    environment:
+      - PORT=8080
+      - API_HOST=0.0.0.0
+      - APP_ENV=development
+      - DATABASE_URL=postgres://vtx_user:vtx_password@postgres:5432/vtx_platform?sslmode=disable
+      - TEMPORAL_HOST_PORT=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+      - TEMPORAL_TASK_QUEUE=vtx-task-queue
+      - API_AUTH_TOKEN=vtx-dev-secret-token-change-in-production
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+    container_name: vtx-web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_APP_ENV=development
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:

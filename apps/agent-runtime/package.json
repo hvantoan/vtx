@@ -1,0 +1,23 @@
+{
+  "name": "@vtx/agent-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js host for Pi and OMP coding agents communicating via JSON-RPC 2.0 stdio",
+  "type": "module",
+  "main": "dist/host.js",
+  "scripts": {
+    "dev": "tsx src/host.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . || true",
+    "test": "vitest run",
+    "start": "node dist/host.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "vtx-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VTX Autonomous Development Pipeline Monorepo",
+  "scripts": {
+    "dev:web": "pnpm --filter @vtx/web dev",
+    "dev:agent": "pnpm --filter @vtx/agent-runtime dev",
+    "build:web": "pnpm --filter @vtx/web build",
+    "build:agent": "pnpm --filter @vtx/agent-runtime build",
+    "build:js": "pnpm -r build",
+    "test:web": "pnpm --filter @vtx/web test",
+    "test:agent": "pnpm --filter @vtx/agent-runtime test",
+    "test:js": "pnpm -r test",
+    "lint:web": "pnpm --filter @vtx/web lint",
+    "lint:agent": "pnpm --filter @vtx/agent-runtime lint",
+    "lint:js": "pnpm -r lint",
+    "typecheck:web": "pnpm --filter @vtx/web typecheck",
+    "typecheck:agent": "pnpm --filter @vtx/agent-runtime typecheck",
+    "typecheck:js": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@10.31.0"
+}

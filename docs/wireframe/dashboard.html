@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>VTX Platform — Status Dashboard (Wireframe)</title>
+<!--
+  ============================================================================
+  VTX PLATFORM — SYSTEM STATUS DASHBOARD · INTERACTIVE WIREFRAME
+  ============================================================================
+  Single-file preview of `apps/web` Phase 0 dashboard.
+  Design tokens per docs/design/design-guidelines.md.
+
+  Mocked data sources:
+    GET /health                -> Liveness card + uptime seed
+    GET /ready                 -> Readiness card + dependency rows (db, temporal)
+    GET /api/v1/workers        -> Worker count + worker list
+    GET /api/v1/system/status  -> Build meta footer
+    GET /api/v1/events  (SSE)  -> Event stream (role="log")
+
+  Interactions:
+    - Header toggle: switches mock scenario HEALTHY <-> DEGRADED
+    - Pause / Clear controls on the event stream
+    - Uptime counter ticks client-side (1s)
+  ============================================================================
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          base:     '#0B0F19',
+          surface:  '#111827',
+          elevated: '#1A2234',
+          line:        '#1E293B',
+          'line-strong': '#334155',
+          accent:   { DEFAULT: '#3B82F6', hover: '#2563EB' },
+          success:  '#10B981',
+          warning:  '#F59E0B',
+          danger:   '#EF4444',
+        },
+        fontFamily: {
+          sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  :root { color-scheme: dark; }
+  html { background: #0B0F19; }
+  body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  /* Live status pulse — success/connected only */
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  .pulse-dot { animation: status-pulse 2s ease-in-out infinite; }
+  .live-glow { box-shadow: 0 0 6px rgba(59, 130, 246, 0.55); }
+
+  /* New event row entrance */
+  @keyframes row-enter {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .row-enter { animation: row-enter 200ms cubic-bezier(0.4, 0, 0.2, 1); }
+
+  /* Reconnecting spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-dot, .row-enter, .spin { animation: none !important; }
+    * { transition: none !important; }
+  }
+
+  /* Custom scrollbar to match dark theme */
+  .log-scroll::-webkit-scrollbar { width: 8px; }
+  .log-scroll::-webkit-scrollbar-track { background: transparent; }
+  .log-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  .log-scroll { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+</style>
+</head>
+<body class="bg-base text-slate-100 min-h-screen antialiased">
+
+<!-- ============================= HEADER ============================= -->
+<header class="sticky top-0 z-20 border-b border-line bg-surface/95 backdrop-blur">
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 h-14 flex items-center gap-3">
+    <!-- Wordmark -->
+    <div class="flex items-center gap-2.5">
+      <div class="w-7 h-7 rounded-md bg-accent flex items-center justify-center" aria-hidden="true">
+        <span class="text-white font-extrabold text-sm leading-none">V</span>
+      </div>
+      <span class="font-bold tracking-tight text-[15px]">VTX Platform</span>
+    </div>
+    <span id="env-badge" class="mono text-[11px] uppercase tracking-wider px-2 py-0.5 rounded-md bg-accent/10 text-accent border border-accent/25">development</span>
+    <span class="hidden sm:block text-slate-400 text-sm">/ System Status</span>
+
+    <div class="flex-1"></div>
+
+    <!-- SSE connection pill -->
+    <div id="sse-pill" class="hidden sm:flex items-center gap-2 mono text-[11px] uppercase tracking-wider px-2.5 py-1 rounded-md border" role="status" aria-label="Event stream connection status">
+      <!-- populated by JS -->
+    </div>
+
+    <!-- Build version -->
+    <span class="hidden md:block mono text-[11px] text-slate-500">v<span id="hdr-version">1.0.0</span>·<span id="hdr-commit">a1b2c3d</span></span>
+
+    <!-- Mock scenario toggle (radiogroup) -->
+    <div class="flex items-center gap-2 pl-2 border-l border-line">
+      <span class="hidden lg:block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Mock</span>
+      <div id="scenario-toggle" role="radiogroup" aria-label="Mock scenario"
+           class="flex rounded-md border border-line overflow-hidden">
+        <button type="button" role="radio" aria-checked="true" data-scenario="healthy"
+          class="scenario-btn px-3 py-1.5 text-[12px] font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset">
+          Healthy
+        </button>
+        <button type="button" role="radio" aria-checked="false" data-scenario="degraded"
+          class="scenario-btn px-3 py-1.5 text-[12px] font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset">
+          Degraded
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="mx-auto max-w-7xl px-4 sm:px-6 py-6 space-y-4">
+
+  <!-- ===================== ALERT BANNER (degraded only) ===================== -->
+  <div id="alert-banner" role="alert"
+       class="hidden flex items-start gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3">
+    <svg class="w-4 h-4 mt-0.5 shrink-0 text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    <div class="text-sm">
+      <p class="font-semibold text-danger">Readiness check failing — platform is <span class="mono">not_ready</span></p>
+      <p class="text-slate-300 mt-0.5" id="alert-detail">GET <span class="mono">/ready</span> returned 503. One or more dependencies are unreachable.</p>
+    </div>
+  </div>
+
+  <!-- ===================== STAT CARDS ROW ===================== -->
+  <section aria-label="System status overview" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+
+    <!-- Liveness · GET /health -->
+    <section id="card-liveness" aria-label="Liveness"
+             class="rounded-lg border border-line bg-surface p-4 flex flex-col gap-3 min-h-[128px]">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        Liveness <span class="mono font-normal text-slate-500 normal-case tracking-normal">· GET /health</span>
+      </div>
+      <div class="flex items-center gap-2.5">
+        <span id="liveness-dot" class="w-2.5 h-2.5 rounded-full shrink-0" aria-hidden="true"></span>
+        <span id="liveness-badge" role="status"><!-- MetricBadge --></span>
+        <span id="liveness-code" class="mono text-[12px] text-slate-400 ml-auto"></span>
+      </div>
+      <div class="mono text-[12px] text-slate-500 mt-auto">
+        <span id="liveness-latency">—</span> · checked <span id="liveness-checked">—</span>
+      </div>
+    </section>
+
+    <!-- Readiness · GET /ready -->
+    <section id="card-readiness" aria-label="Readiness"
+             class="rounded-lg border border-line bg-surface p-4 flex flex-col gap-3 min-h-[128px]">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        Readiness <span class="mono font-normal text-slate-500 normal-case tracking-normal">· GET /ready</span>
+      </div>
+      <div class="flex items-center gap-2.5">
+        <span id="readiness-dot" class="w-2.5 h-2.5 rounded-full shrink-0" aria-hidden="true"></span>
+        <span id="readiness-badge" role="status"><!-- MetricBadge --></span>
+        <span id="readiness-code" class="mono text-[12px] text-slate-400 ml-auto"></span>
+      </div>
+      <div class="mono text-[12px] text-slate-500 mt-auto">
+        <span id="readiness-summary">—</span> deps checked · <span id="readiness-checked">—</span>
+      </div>
+    </section>
+
+    <!-- Workers · GET /api/v1/workers -->
+    <section id="card-workers" aria-label="Workers"
+             class="rounded-lg border border-line bg-surface p-4 flex flex-col gap-3 min-h-[128px]">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        Workers <span class="mono font-normal text-slate-500 normal-case tracking-normal">· GET /api/v1/workers</span>
+      </div>
+      <div class="flex items-end gap-2.5">
+        <span id="workers-count" class="mono text-2xl font-medium leading-none">—</span>
+        <span class="text-[13px] text-slate-400 mb-px">running</span>
+        <span id="workers-badge" class="ml-auto" role="status"><!-- MetricBadge --></span>
+      </div>
+      <div class="mono text-[12px] text-slate-500 mt-auto">
+        queue <span id="workers-queue" class="text-slate-400">vtx-task-queue</span> · <span id="workers-active">—</span> active workflows
+      </div>
+    </section>
+
+    <!-- Uptime · derived from /health -->
+    <section id="card-uptime" aria-label="Uptime"
+             class="rounded-lg border border-line bg-surface p-4 flex flex-col gap-3 min-h-[128px]">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        Uptime <span class="mono font-normal text-slate-500 normal-case tracking-normal">· /health uptime_seconds</span>
+      </div>
+      <div class="flex items-end gap-2">
+        <span id="uptime-value" class="mono text-2xl font-medium leading-none">—</span>
+      </div>
+      <div class="mono text-[12px] text-slate-500 mt-auto">
+        API process · started <span id="uptime-started">—</span>
+      </div>
+    </section>
+  </section>
+
+  <!-- ===================== CONTENT GRID ===================== -->
+  <div class="grid lg:grid-cols-3 gap-4 items-start">
+
+    <!-- LEFT COLUMN: Dependencies + Workers -->
+    <div class="lg:col-span-1 space-y-4">
+
+      <!-- Dependencies card -->
+      <section aria-label="Dependencies" class="rounded-lg border border-line bg-surface">
+        <header class="px-4 pt-4 pb-3 flex items-center justify-between border-b border-line">
+          <h2 class="text-[15px] font-semibold">Dependencies</h2>
+          <span class="mono text-[11px] text-slate-500">GET /ready</span>
+        </header>
+        <ul id="dependency-list" class="divide-y divide-line px-4">
+          <!-- rows rendered by JS -->
+        </ul>
+      </section>
+
+      <!-- Workers card -->
+      <section aria-label="Worker status" class="rounded-lg border border-line bg-surface">
+        <header class="px-4 pt-4 pb-3 flex items-center justify-between border-b border-line">
+          <h2 class="text-[15px] font-semibold">Workers</h2>
+          <span class="mono text-[11px] text-slate-500">GET /api/v1/workers</span>
+        </header>
+        <ul id="worker-list" class="divide-y divide-line px-4">
+          <!-- rows rendered by JS -->
+        </ul>
+      </section>
+    </div>
+
+    <!-- RIGHT COLUMN: SSE Log Viewer -->
+    <section aria-label="Event stream"
+             class="lg:col-span-2 rounded-lg border border-line bg-surface flex flex-col min-h-[420px]">
+      <header class="px-4 pt-4 pb-3 flex items-center gap-3 border-b border-line">
+        <h2 class="text-[15px] font-semibold">Event Stream</h2>
+        <span id="sse-badge" role="status"><!-- MetricBadge --></span>
+        <span class="mono text-[11px] text-slate-500 hidden sm:inline">GET /api/v1/events</span>
+        <div class="flex-1"></div>
+        <button id="btn-pause" type="button"
+          class="inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-md text-[12px] font-semibold
+                 border border-line-strong text-slate-300 hover:bg-elevated transition-colors duration-150
+                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          aria-pressed="false">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <path stroke-linecap="round" d="M10 9v6M14 9v6"/>
+          </svg>
+          <span id="btn-pause-label">Pause</span>
+        </button>
+        <button id="btn-clear" type="button"
+          class="inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-md text-[12px] font-semibold
+                 border border-line-strong text-slate-300 hover:bg-elevated transition-colors duration-150
+                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/>
+          </svg>
+          Clear
+        </button>
+      </header>
+
+      <!-- disconnect notice (hidden unless disconnected) -->
+      <div id="sse-notice" class="hidden mx-4 mt-3 rounded-md border-l-2 border-warning bg-warning/10 px-3 py-2">
+        <p class="text-[13px] text-warning"><span class="font-semibold">Stream disconnected.</span>
+          <span class="text-slate-300">Reconnecting with exponential backoff… buffered events are retained.</span></p>
+      </div>
+
+      <div id="event-log" role="log" aria-label="Platform event stream"
+           class="log-scroll flex-1 overflow-y-auto divide-y divide-line/60 px-4 py-1">
+        <!-- event rows rendered by JS, newest first -->
+      </div>
+    </section>
+  </div>
+
+  <!-- ===================== FOOTER BUILD META ===================== -->
+  <footer class="pt-2 pb-4">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mono text-[11px] text-slate-500 border-t border-line pt-4">
+      <span>wireframe · mock data</span>
+      <span aria-hidden="true">·</span>
+      <span>version <span id="meta-version" class="text-slate-400">—</span></span>
+      <span>commit <span id="meta-commit" class="text-slate-400">—</span></span>
+      <span>env <span id="meta-env" class="text-slate-400">—</span></span>
+      <span><span id="meta-go" class="text-slate-400">—</span></span>
+      <span><span id="meta-goroutines" class="text-slate-400">—</span> goroutines</span>
+      <span class="ml-auto">polls /health 5s · /ready 10s · /workers 10s · /status 30s</span>
+    </div>
+  </footer>
+</main>
+
+<script>
+/* ==========================================================================
+   MOCK DATA — mirrors contracts/openapi/v1/openapi.yaml + events/v1/events.json
+   ========================================================================== */
+const SCENARIOS = {
+  healthy: {
+    alert: null,
+    health:   { status: 'ok',          http: 200, latencyMs: 1.8,  uptimeSeconds: 8432.5 },
+    ready:    { status: 'ready',       http: 200,
+      dependencies: {
+        database: { status: 'up',       latency_ms: 2.4,  error: null, name: 'PostgreSQL', endpoint: 'postgres:5432/vtx_platform' },
+        temporal: { status: 'up',       latency_ms: 11.7, error: null, name: 'Temporal',   endpoint: 'temporal:7233 (grpc)' },
+      }},
+    workers:  { status: 'healthy', workers: [
+      { id: 'temporal-worker-default', queue: 'vtx-task-queue', status: 'running', active_workflows: 2 },
+      { id: 'agent-runtime-node-01',   queue: 'vtx-task-queue', status: 'idle',    active_workflows: 0 },
+    ]},
+    system:   { version: '1.0.0', commit: 'a1b2c3d', environment: 'development', go_version: 'go1.25.7', goroutines: 14 },
+    sse:      'connected',
+    events: [
+      { type: 'task.completed',        source: 'api',    ts: -6,    data: { task_id: 'VTX-14', duration_ms: 1830 } },
+      { type: 'system.heartbeat',      source: 'worker', ts: -12,   data: { seq: 128 } },
+      { type: 'task.progress',         source: 'api',    ts: -18,   data: { task_id: 'VTX-14', pct: 60 } },
+      { type: 'task.started',          source: 'api',    ts: -25,   data: { task_id: 'VTX-14' } },
+      { type: 'worker.status_changed', source: 'worker', ts: -31,   data: { id: 'agent-runtime-node-01', from: 'running', to: 'idle' } },
+      { type: 'task.created',          source: 'api',    ts: -38,   data: { task_id: 'VTX-14' } },
+      { type: 'system.heartbeat',      source: 'worker', ts: -45,   data: { seq: 127 } },
+    ],
+  },
+
+  degraded: {
+    alert: 'database',
+    health:   { status: 'ok',          http: 200, latencyMs: 3.9,  uptimeSeconds: 8432.5 },
+    ready:    { status: 'not_ready',   http: 503,
+      dependencies: {
+        database: { status: 'down',     latency_ms: null, error: 'dial tcp 127.0.0.1:5432: connect: connection refused', name: 'PostgreSQL', endpoint: 'postgres:5432/vtx_platform' },
+        temporal: { status: 'degraded', latency_ms: 512.3, error: 'context deadline exceeded (frontend ping)',            name: 'Temporal',   endpoint: 'temporal:7233 (grpc)' },
+      }},
+    workers:  { status: 'degraded', workers: [
+      { id: 'temporal-worker-default', queue: 'vtx-task-queue', status: 'running', active_workflows: 0 },
+      { id: 'agent-runtime-node-01',   queue: 'vtx-task-queue', status: 'stopped', active_workflows: 0 },
+    ]},
+    system:   { version: '1.0.0', commit: 'a1b2c3d', environment: 'development', go_version: 'go1.25.7', goroutines: 41 },
+    sse:      'reconnecting',
+    events: [
+      { type: 'task.failed',           source: 'api',    ts: -4,  data: { task_id: 'VTX-16', error: 'activity timeout' } },
+      { type: 'worker.status_changed', source: 'worker', ts: -9,  data: { id: 'agent-runtime-node-01', from: 'idle', to: 'stopped' } },
+      { type: 'system.heartbeat',      source: 'worker', ts: -15, data: { seq: 129 } },
+      { type: 'task.progress',         source: 'api',    ts: -21, data: { task_id: 'VTX-16', pct: 45 } },
+      { type: 'task.started',          source: 'api',    ts: -28, data: { task_id: 'VTX-16' } },
+      { type: 'task.created',          source: 'api',    ts: -33, data: { task_id: 'VTX-16' } },
+    ],
+  },
+};
+
+/* ==========================================================================
+   HELPERS
+   ========================================================================== */
+const $ = (id) => document.getElementById(id);
+
+const BADGE = {
+  success: 'bg-success/10 text-success border border-success/30',
+  warning: 'bg-warning/10 text-warning border border-warning/30',
+  danger:  'bg-danger/10 text-danger border border-danger/30',
+  info:    'bg-accent/10 text-accent border border-accent/30',
+  neutral: 'bg-slate-500/10 text-slate-400 border border-slate-500/30',
+};
+
+function badge(text, variant) {
+  return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold uppercase tracking-wider ${BADGE[variant]}">
+    <span class="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true"></span>${text}</span>`;
+}
+
+const STATUS_VARIANT = { up: 'success', ok: 'success', ready: 'success', running: 'success', healthy: 'success',
+                         degraded: 'warning', idle: 'warning', reconnecting: 'warning',
+                         down: 'danger', not_ready: 'danger', stopped: 'danger', error: 'danger',
+                         unknown: 'neutral' };
+const STATUS_LABEL   = { up: 'UP', ok: 'OK', ready: 'READY', running: 'RUNNING', healthy: 'HEALTHY',
+                         degraded: 'DEGRADED', idle: 'IDLE', reconnecting: 'RECONNECTING',
+                         down: 'DOWN', not_ready: 'NOT READY', stopped: 'STOPPED', error: 'ERROR',
+                         unknown: 'UNKNOWN' };
+
+const DOT_BG = { success: 'bg-success', warning: 'bg-warning', danger: 'bg-danger', neutral: 'bg-slate-500' };
+
+const EVENT_COLOR = {
+  'task.completed':        'text-success',
+  'task.failed':           'text-danger',
+  'task.progress':         'text-accent',
+  'task.created':          'text-accent',
+  'task.started':          'text-accent',
+  'worker.status_changed': 'text-warning',
+  'system.heartbeat':      'text-slate-500',
+};
+
+function fmtLatency(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms >= 1000) return (ms / 1000).toFixed(2) + ' s';
+  return ms.toFixed(1) + ' ms';
+}
+function fmtDuration(sec) {
+  const s = Math.floor(sec);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return [h, m, r].map(n => String(n).padStart(2, '0')).join(':');
+}
+function fmtTime(date) {
+  const p = (n, l = 2) => String(n).padStart(l, '0');
+  return `${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}.${p(date.getMilliseconds(), 3)}`;
+}
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* ==========================================================================
+   STATE + RENDER
+   ========================================================================== */
+let scenario = 'healthy';
+let paused = false;
+let uptimeSeconds = 0;
+let bootTime = null;
+let checkedAt = {};
+
+function markChecked(key) { checkedAt[key] = new Date(); }
+function ago(key) {
+  if (!checkedAt[key]) return '—';
+  return Math.max(0, Math.round((Date.now() - checkedAt[key]) / 1000)) + 's ago';
+}
+
+function setDot(el, variant, pulse) {
+  el.className = `w-2.5 h-2.5 rounded-full shrink-0 ${DOT_BG[variant]}` + (pulse ? ' pulse-dot' : '');
+}
+
+function renderScenario() {
+  const S = SCENARIOS[scenario];
+  const now = Date.now();
+
+  /* ---- alert banner ---- */
+  $('alert-banner').classList.toggle('hidden', !S.alert);
+  $('alert-banner').classList.toggle('flex', !!S.alert);
+
+  /* ---- liveness ---- */
+  const hv = STATUS_VARIANT[S.health.status] || 'neutral';
+  setDot($('liveness-dot'), hv, hv === 'success');
+  $('liveness-badge').innerHTML  = badge(STATUS_LABEL[S.health.status], hv);
+  $('liveness-code').textContent = `HTTP ${S.health.http}`;
+  $('liveness-latency').textContent = fmtLatency(S.health.latencyMs);
+  markChecked('health');
+
+  /* ---- readiness ---- */
+  const rv = STATUS_VARIANT[S.ready.status] || 'neutral';
+  setDot($('readiness-dot'), rv, rv === 'success');
+  $('readiness-badge').innerHTML  = badge(STATUS_LABEL[S.ready.status], rv);
+  $('readiness-code').textContent = `HTTP ${S.ready.http}`;
+  const deps = Object.values(S.ready.dependencies);
+  $('readiness-summary').textContent = `${deps.filter(d => d.status === 'up').length}/${deps.length}`;
+  markChecked('ready');
+
+  /* ---- workers ---- */
+  const running = S.workers.workers.filter(w => w.status === 'running').length;
+  const active  = S.workers.workers.reduce((n, w) => n + (w.active_workflows || 0), 0);
+  $('workers-count').textContent  = running;
+  $('workers-badge').innerHTML    = badge(STATUS_LABEL[S.workers.status], STATUS_VARIANT[S.workers.status] || 'neutral');
+  $('workers-active').textContent = active;
+
+  /* ---- uptime seed ---- */
+  uptimeSeconds = S.health.uptimeSeconds;
+  bootTime = new Date(now - uptimeSeconds * 1000);
+  $('uptime-started').textContent = bootTime.toLocaleTimeString([], { hour12: false });
+  renderUptime();
+
+  /* ---- dependency rows ---- */
+  $('dependency-list').innerHTML = Object.values(S.ready.dependencies).map((d) => {
+    const v = STATUS_VARIANT[d.status] || 'neutral';
+    return `<li class="py-3">
+      <div class="flex items-center gap-2.5">
+        <span class="w-2 h-2 rounded-full shrink-0 ${DOT_BG[v]}" aria-hidden="true"></span>
+        <span class="text-sm font-medium">${d.name}</span>
+        <span class="ml-2">${badge(STATUS_LABEL[d.status], v)}</span>
+        <span class="mono text-[12px] text-slate-400 ml-auto">${fmtLatency(d.latency_ms)}</span>
+      </div>
+      <div class="mono text-[11px] text-slate-500 mt-1 pl-4">${d.endpoint}</div>
+      ${d.error ? `<div class="mono text-[11px] text-danger mt-1 pl-4 break-all">${esc(d.error)}</div>` : ''}
+    </li>`;
+  }).join('');
+
+  /* ---- worker rows ---- */
+  $('worker-list').innerHTML = S.workers.workers.map(w => {
+    const v = STATUS_VARIANT[w.status] || 'neutral';
+    return `<li class="py-3">
+      <div class="flex items-center gap-2.5">
+        <span class="w-2 h-2 rounded-full shrink-0 ${DOT_BG[v]}" aria-hidden="true"></span>
+        <span class="mono text-[13px]">${w.id}</span>
+        <span class="ml-auto">${badge(STATUS_LABEL[w.status], v)}</span>
+      </div>
+      <div class="mono text-[11px] text-slate-500 mt-1 pl-4">
+        queue <span class="text-slate-400">${w.queue}</span> · ${w.active_workflows} active workflow${w.active_workflows === 1 ? '' : 's'}
+      </div>
+    </li>`;
+  }).join('');
+
+  /* ---- SSE status ---- */
+  renderSseStatus(S.sse);
+
+  /* ---- build meta ---- */
+  $('meta-version').textContent = S.system.version;
+  $('meta-commit').textContent  = S.system.commit;
+  $('meta-env').textContent     = S.system.environment;
+  $('meta-go').textContent      = S.system.go_version;
+  $('meta-goroutines').textContent = S.system.goroutines;
+  $('hdr-version').textContent  = S.system.version;
+  $('hdr-commit').textContent   = S.system.commit;
+  $('env-badge').textContent    = S.system.environment;
+
+  /* ---- events ---- */
+  const events = S.events.map(e => ({
+    ...e, when: new Date(now + e.ts * 1000),
+    id: 'evt_' + Math.random().toString(36).slice(2, 10),
+  }));
+  renderEvents(events);
+}
+
+function renderSseStatus(state) {
+  const map = {
+    connected:    { label: 'CONNECTED',    variant: 'info',    notice: false },
+    reconnecting: { label: 'RECONNECTING', variant: 'warning', notice: true  },
+    disconnected: { label: 'DISCONNECTED', variant: 'danger',  notice: true  },
+  };
+  const s = map[state] || map.disconnected;
+  const spin = state === 'reconnecting'
+    ? '<svg class="w-3 h-3 spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path stroke-linecap="round" d="M12 3a9 9 0 019 9"/></svg>'
+    : '';
+  $('sse-badge').innerHTML = badge(s.label, s.variant);
+  $('sse-pill').innerHTML = `<span class="w-1.5 h-1.5 rounded-full ${s.variant === 'info' ? 'bg-accent live-glow pulse-dot' : s.variant === 'warning' ? 'bg-warning' : 'bg-danger'}" aria-hidden="true"></span>${spin}<span class="${s.variant === 'info' ? 'text-accent' : s.variant === 'warning' ? 'text-warning' : 'text-danger'}">SSE ${s.label}</span>`;
+  $('sse-pill').className = `hidden sm:flex items-center gap-2 mono text-[11px] uppercase tracking-wider px-2.5 py-1 rounded-md border ${BADGE[s.variant].split(' ').slice(2).join(' ')}`;
+  $('sse-notice').classList.toggle('hidden', !s.notice);
+}
+
+function eventRow(e) {
+  const color = EVENT_COLOR[e.type] || 'text-slate-400';
+  const dim = e.type === 'system.heartbeat' ? 'opacity-60' : '';
+  const payload = esc(JSON.stringify(e.data));
+  return `<div class="row-enter py-2 ${dim}">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+      <span class="mono text-[11px] text-slate-500 shrink-0">${fmtTime(e.when)}</span>
+      <span class="mono text-[12px] font-medium ${color}">${e.type}</span>
+      <span class="mono text-[11px] text-slate-500">${e.source}</span>
+      <span class="mono text-[11px] text-slate-500 ml-auto hidden sm:inline">id ${e.id}</span>
+    </div>
+    <div class="mono text-[11px] text-slate-500 mt-0.5 truncate" title="${payload}">${payload}</div>
+  </div>`;
+}
+
+function renderEvents(events) {
+  const log = $('event-log');
+  if (!events.length) {
+    log.innerHTML = '<div class="py-10 text-center mono text-[12px] text-slate-500">— waiting for events on /api/v1/events —</div>';
+    return;
+  }
+  log.innerHTML = events.map(eventRow).join('');
+}
+
+function renderUptime() {
+  $('uptime-value').textContent = fmtDuration(uptimeSeconds);
+  $('liveness-checked').textContent  = ago('health');
+  $('readiness-checked').textContent = ago('ready');
+}
+
+/* ==========================================================================
+   INTERACTIONS
+   ========================================================================== */
+
+/* Scenario toggle (radiogroup semantics) */
+const scenarioBtns = [...document.querySelectorAll('.scenario-btn')];
+function paintToggle() {
+  scenarioBtns.forEach(b => {
+    const on = b.dataset.scenario === scenario;
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    b.className = `scenario-btn px-3 py-1.5 text-[12px] font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
+      on ? (scenario === 'healthy' ? 'bg-success/15 text-success' : 'bg-warning/15 text-warning')
+         : 'text-slate-400 hover:bg-elevated hover:text-slate-200'}`;
+  });
+}
+scenarioBtns.forEach((b, i) => {
+  b.addEventListener('click', () => {
+    if (scenario !== b.dataset.scenario) { scenario = b.dataset.scenario; paintToggle(); renderScenario(); }
+  });
+  b.addEventListener('keydown', (e) => {
+    let t = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') t = scenarioBtns[(i + 1) % scenarioBtns.length];
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   t = scenarioBtns[(i - 1 + scenarioBtns.length) % scenarioBtns.length];
+    if (t) { e.preventDefault(); t.focus(); t.click(); }
+  });
+});
+
+/* Pause / resume event feed */
+$('btn-pause').addEventListener('click', () => {
+  paused = !paused;
+  $('btn-pause').setAttribute('aria-pressed', String(paused));
+  $('btn-pause-label').textContent = paused ? 'Resume' : 'Pause';
+});
+
+/* Clear event feed */
+$('btn-clear').addEventListener('click', () => renderEvents([]));
+
+/* Uptime ticker + "checked Xs ago" refresh — 1s cadence */
+setInterval(() => { uptimeSeconds += 1; renderUptime(); }, 1000);
+
+/* Simulated live SSE feed: a heartbeat every 8s while unpaused (healthy only) */
+let seq = 130;
+setInterval(() => {
+  if (paused || scenario !== 'healthy') return;
+  const e = { type: 'system.heartbeat', source: 'worker', when: new Date(), data: { seq: seq++ },
+              id: 'evt_' + Math.random().toString(36).slice(2, 10) };
+  const log = $('event-log');
+  const empty = log.querySelector('div.text-center');
+  if (empty) log.innerHTML = '';
+  log.insertAdjacentHTML('afterbegin', eventRow(e));
+  while (log.children.length > 200) log.lastElementChild.remove(); /* buffer cap */
+}, 8000);
+
+/* ------------------------------------------------------------------ */
+paintToggle();
+renderScenario();
+</script>
+</body>
+</html>

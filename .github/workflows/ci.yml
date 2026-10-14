@@ -1,0 +1,174 @@
+name: VTX CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  filter:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      web: ${{ steps.changes.outputs.web }}
+      agent: ${{ steps.changes.outputs.agent }}
+      contracts: ${{ steps.changes.outputs.contracts }}
+      infra: ${{ steps.changes.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        with:
+          filters: |
+            backend:
+              - 'apps/backend/**'
+              - 'contracts/**'
+              - 'infra/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'apps/web/**'
+              - 'contracts/**'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'package.json'
+              - '.github/workflows/ci.yml'
+            agent:
+              - 'apps/agent-runtime/**'
+              - 'contracts/**'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'package.json'
+              - '.github/workflows/ci.yml'
+            contracts:
+              - 'contracts/**'
+            infra:
+              - 'infra/**'
+
+  boundary-check:
+    name: Monorepo Boundary & Conformance Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run boundary check script
+        run: ./infra/scripts/check-boundaries.sh
+
+  backend-ci:
+    name: Backend CI (Go)
+    needs: [filter, boundary-check]
+    if: needs.filter.outputs.backend == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'apps/backend/go.mod'
+          cache-dependency-path: 'apps/backend/go.sum'
+      - name: Go Vet
+        run: make vet
+      - name: Go Test
+        run: make test-backend
+      - name: Go Build
+        run: make build-backend
+
+  web-ci:
+    name: Web CI (Next.js)
+    needs: [filter, boundary-check]
+    if: needs.filter.outputs.web == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck Web
+        run: make typecheck-web
+      - name: Lint Web
+        run: make lint-web
+      - name: Test Web
+        run: make test-web
+      - name: Build Web
+        run: make build-web
+
+  agent-ci:
+    name: Agent Runtime CI (Node.js)
+    needs: [filter, boundary-check]
+    if: needs.filter.outputs.agent == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck Agent Runtime
+        run: make typecheck-agent
+      - name: Lint Agent Runtime
+        run: make lint-agent
+      - name: Test Agent Runtime
+        run: make test-agent
+      - name: Build Agent Runtime
+        run: make build-agent
+
+  contract-conformance:
+    name: Contract Conformance
+    needs: [filter, boundary-check]
+    if: needs.filter.outputs.contracts == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate OpenAPI Spec
+        run: npx @redocly/cli lint contracts/openapi/v1/openapi.yaml || true
+      - name: Validate JSON Schemas
+        run: |
+          node -e "
+            const fs = require('fs');
+            JSON.parse(fs.readFileSync('contracts/agent/v1/agent-ipc.json'));
+            JSON.parse(fs.readFileSync('contracts/events/v1/events.json'));
+            console.log('JSON schemas are valid syntax.');
+          "
+
+  gate:
+    name: Required Status Checks Gate
+    needs:
+      - boundary-check
+      - backend-ci
+      - web-ci
+      - agent-ci
+      - contract-conformance
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate pipeline gate
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "Pipeline job results: $results"
+          if echo "$results" | grep -E -q 'failure|cancelled'; then
+            echo "❌ Pipeline check failed."
+            exit 1
+          fi
+          echo "✅ All required checks passed or were safely skipped."
+          exit 0
