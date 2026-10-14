@@ -9,15 +9,18 @@
     "dev": "tsx src/host.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . || true",
+    "lint": "eslint .",
     "test": "vitest run",
     "start": "node dist/host.js"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.13.0",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
+    "typescript-eslint": "^8.71.2",
     "vitest": "^3.0.4"
   }
 }

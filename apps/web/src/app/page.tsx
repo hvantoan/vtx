@@ -67,9 +67,29 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    loadData();
+    let ignore = false;
+    const init = async () => {
+      const [hRes, rRes, sRes, wRes] = await Promise.all([
+        fetchHealth(),
+        fetchReady(),
+        fetchSystemStatus(),
+        fetchWorkers(),
+      ]);
+      if (!ignore) {
+        setHealth(hRes.data);
+        setHealthLatency(hRes.latencyMs);
+        setReady(rRes.data);
+        setReadyLatency(rRes.latencyMs);
+        setSystem(sRes.data);
+        setWorkers(wRes.data);
+        setLastUpdated(new Date());
+        setIsLoading(false);
+      }
+    };
+    void init();
     pollIntervalRef.current = setInterval(loadData, 5000);
     return () => {
+      ignore = true;
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }

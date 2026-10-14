@@ -37,7 +37,7 @@ export class AgentHost {
     try {
       req = JSON.parse(line) as JsonRpcRequest;
     } catch (err: unknown) {
-      logStderr("Failed to parse incoming line as JSON-RPC", { line });
+      logStderr("Failed to parse incoming line as JSON-RPC", { line, error: String(err) });
       this.channel.sendResponse({
         jsonrpc: "2.0",
         id: null,

@@ -88,8 +88,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version-file: '.node-version'
@@ -113,8 +111,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version-file: '.node-version'
@@ -141,7 +137,7 @@ jobs:
         with:
           node-version: 22
       - name: Validate OpenAPI Spec
-        run: npx @redocly/cli lint contracts/openapi/v1/openapi.yaml || true
+        run: npx @redocly/cli lint contracts/openapi/v1/openapi.yaml
       - name: Validate JSON Schemas
         run: |
           node -e "
