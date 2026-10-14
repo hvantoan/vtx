@@ -43,14 +43,8 @@ func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Han
 					token = parts[1]
 				}
 			}
-
-			// Fallback: check query parameter ?token= for EventSource / SSE browser clients
 			if token == "" {
-				token = r.URL.Query().Get("token")
-			}
-
-			if token == "" {
-				http.Error(w, `{"error":"unauthorized","message":"Missing authorization token in header or query parameter"}`, http.StatusUnauthorized)
+				http.Error(w, `{"error":"unauthorized","message":"Missing authorization token in Authorization header"}`, http.StatusUnauthorized)
 				return
 			}
 

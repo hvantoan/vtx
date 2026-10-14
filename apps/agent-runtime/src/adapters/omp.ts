@@ -1,11 +1,18 @@
 import type { TaskExecuteParams, TaskExecuteResult } from "../protocol/types.js";
 import type { AgentAdapter } from "./pi.js";
 import { logStderr } from "../protocol/framing.js";
-
+/**
+ * OmpAgentAdapter (Simulation Double for Bootstrap phase)
+ *
+ * NOTE: In Phase 0 Bootstrap (VTX-14), this adapter operates as an IPC protocol double
+ * to verify NDJSON framing, bidirectional event streaming, cancellation (AbortSignal),
+ * backpressure, and process isolation.
+ * Real agent execution (OMP CLI/SDK binary orchestration) is formally deferred to VTX-7.
+ */
 export class OmpAgentAdapter implements AgentAdapter {
   readonly name = "omp" as const;
   readonly version = "1.0.0";
-
+  readonly isSimulation = true;
   async execute(
     params: TaskExecuteParams,
     onEvent: (event: { event_type: "stdout" | "stderr" | "progress" | "status_change"; payload: string }) => void,

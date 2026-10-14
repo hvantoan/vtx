@@ -8,9 +8,10 @@ import (
 )
 
 type SampleWorkflowInput struct {
-	TaskID    string   `json:"task_id"`
-	Steps     []string `json:"steps"`
-	FailStep  int      `json:"fail_step"`  // Optional step index to fail for testing retries
+	TaskID      string   `json:"task_id"`
+	Steps       []string `json:"steps"`
+	FailStep    int      `json:"fail_step"`  // Optional step index to fail for testing retries
+	StepDelayMs int      `json:"step_delay_ms,omitempty"`
 }
 
 type SampleWorkflowOutput struct {
@@ -43,9 +44,10 @@ func SampleWorkflow(ctx workflow.Context, input SampleWorkflowInput) (SampleWork
 	ctx = workflow.WithActivityOptions(ctx, activityOptions)
 
 	actInput := SampleActivityInput{
-		TaskID:   input.TaskID,
-		Steps:    input.Steps,
-		FailStep: input.FailStep,
+		TaskID:      input.TaskID,
+		Steps:       input.Steps,
+		FailStep:    input.FailStep,
+		StepDelayMs: input.StepDelayMs,
 	}
 
 	var actOutput SampleActivityOutput

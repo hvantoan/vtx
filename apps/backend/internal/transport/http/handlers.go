@@ -18,6 +18,10 @@ type DependencyChecker interface {
 	Ping(ctx context.Context) (time.Duration, error)
 }
 
+type WorkerChecker interface {
+	CheckWorkers(ctx context.Context, queue string) (bool, error)
+}
+
 type Server struct {
 	cfg        *config.Config
 	logger     *slog.Logger
@@ -152,7 +156,62 @@ func (s *Server) HandleSystemStatus(w http.ResponseWriter, r *http.Request) {
 
 // HandleWorkers serves GET /api/v1/workers
 func (s *Server) HandleWorkers(w http.ResponseWriter, r *http.Request) {
-	resp := domain.WorkerStatusList{
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.temporal == nil {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(domain.WorkerStatusList{
+			Status:  "unavailable",
+			Workers: []domain.WorkerItem{},
+		})
+		return
+	}
+
+	// If temporal dependency implements WorkerChecker, query actual task queue pollers
+	if wc, ok := s.temporal.(WorkerChecker); ok {
+		hasActiveWorkers, err := wc.CheckWorkers(ctx, s.cfg.TemporalQueue)
+		if err != nil {
+			s.logger.Warn("Failed to check temporal worker status", "error", err)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(domain.WorkerStatusList{
+				Status:  "unavailable",
+				Workers: []domain.WorkerItem{},
+			})
+			return
+		}
+
+		if !hasActiveWorkers {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(domain.WorkerStatusList{
+				Status: "degraded",
+				Workers: []domain.WorkerItem{
+					{
+						ID:              "temporal-worker-vtx-1",
+						Queue:           s.cfg.TemporalQueue,
+						Status:          "stopped",
+						ActiveWorkflows: 0,
+					},
+				},
+			})
+			return
+		}
+	} else {
+		// Fallback: ping dependency
+		if _, err := s.temporal.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(domain.WorkerStatusList{
+				Status:  "unavailable",
+				Workers: []domain.WorkerItem{},
+			})
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(domain.WorkerStatusList{
 		Status: "healthy",
 		Workers: []domain.WorkerItem{
 			{
@@ -162,11 +221,7 @@ func (s *Server) HandleWorkers(w http.ResponseWriter, r *http.Request) {
 				ActiveWorkflows: 0,
 			},
 		},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	})
 }
 
 // HandleSSE serves GET /api/v1/events (Authenticated SSE stream)

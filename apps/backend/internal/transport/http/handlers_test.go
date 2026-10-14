@@ -26,6 +26,16 @@ func (m *mockDependency) Ping(ctx context.Context) (time.Duration, error) {
 	return m.latency, m.err
 }
 
+type mockWorkerDependency struct {
+	mockDependency
+	activeWorkers bool
+	workerErr     error
+}
+
+func (m *mockWorkerDependency) CheckWorkers(ctx context.Context, queue string) (bool, error) {
+	return m.activeWorkers, m.workerErr
+}
+
 func setupTestServer(db transporthttp.DependencyChecker, temporal transporthttp.DependencyChecker) (http.Handler, *config.Config) {
 	cfg := &config.Config{
 		Port:          "49080",
@@ -130,6 +140,12 @@ func TestSSEAuth_Unauthorized(t *testing.T) {
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// Token provided only in query parameter must be rejected (security fix P2.1)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/events?token=test-secret-token", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 }
 
 func TestSSE_AuthenticatedSuccess(t *testing.T) {
@@ -149,7 +165,7 @@ func TestSSE_AuthenticatedSuccess(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), "system.heartbeat")
 }
 
-func TestWorkersHandler(t *testing.T) {
+func TestWorkersHandler_TemporalNil(t *testing.T) {
 	handler, _ := setupTestServer(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
@@ -162,6 +178,71 @@ func TestWorkersHandler(t *testing.T) {
 	var resp domain.WorkerStatusList
 	err := json.Unmarshal(rr.Body.Bytes(), &resp)
 	require.NoError(t, err)
+	assert.Equal(t, "unavailable", resp.Status)
+	assert.Empty(t, resp.Workers)
+}
+
+func TestWorkersHandler_WorkersRunning(t *testing.T) {
+	workerMock := &mockWorkerDependency{
+		mockDependency: mockDependency{latency: 2 * time.Millisecond},
+		activeWorkers:  true,
+	}
+	handler, _ := setupTestServer(nil, workerMock)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp domain.WorkerStatusList
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
 	assert.Equal(t, "healthy", resp.Status)
-	assert.Len(t, resp.Workers, 1)
+	require.Len(t, resp.Workers, 1)
+	assert.Equal(t, "running", resp.Workers[0].Status)
+}
+
+func TestWorkersHandler_WorkersStopped(t *testing.T) {
+	workerMock := &mockWorkerDependency{
+		mockDependency: mockDependency{latency: 2 * time.Millisecond},
+		activeWorkers:  false,
+	}
+	handler, _ := setupTestServer(nil, workerMock)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp domain.WorkerStatusList
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "degraded", resp.Status)
+	require.Len(t, resp.Workers, 1)
+	assert.Equal(t, "stopped", resp.Workers[0].Status)
+}
+
+func TestWorkersHandler_TemporalError(t *testing.T) {
+	workerMock := &mockWorkerDependency{
+		mockDependency: mockDependency{latency: 2 * time.Millisecond},
+		workerErr:      errors.New("connection refused"),
+	}
+	handler, _ := setupTestServer(nil, workerMock)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp domain.WorkerStatusList
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", resp.Status)
+	assert.Empty(t, resp.Workers)
 }

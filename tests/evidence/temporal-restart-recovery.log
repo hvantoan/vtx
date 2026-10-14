@@ -1,0 +1,57 @@
+================================================================================
+  VTX Temporal Worker Restart & Heartbeat Recovery Verification (BS-04 / BS-05)
+  Timestamp: 2026-10-14T09:40:42Z
+================================================================================
+Step 0: Building backend worker and CLI binaries...
+  ✅ Binaries compiled successfully.
+Step 1: Checking Temporal cluster connectivity...
+  ✅ Temporal server is ONLINE.
+Step 2: Starting Temporal Worker #1 in background...
+  Worker #1 PID: 2846103
+Step 3: Triggering SampleWorkflow (Task ID: e2e-restart-1791970845, 4 steps, 800ms delay)...
+  Workflow Client PID: 2846200
+Step 4: Waiting 1.2s to allow Step 0 to complete and heartbeat...
+  💥 Simulating worker crash: sending SIGKILL (kill -9) to Worker #1 (PID: 2846103)...
+  ✅ Worker #1 killed and reaped.
+  Worker is confirmed DEAD. Waiting 2s while workflow is suspended in Temporal Server...
+Step 5: Starting Worker #2 to resume execution from heartbeat details...
+  Worker #2 PID: 2846426
+Step 6: Waiting for workflow execution to complete...
+  ✅ Workflow completed successfully!
+
+Step 7: Verifying heartbeat resumption in worker logs...
+------------------- Worker Log Snippet -------------------
+{"time":"2026-10-14T16:40:43.360815751+07:00","level":"INFO","msg":"Starting VTX Temporal Worker","host":"localhost:49233","queue":"vtx-task-queue"}
+{"time":"2026-10-14T16:40:43.415596916+07:00","level":"INFO","msg":"Temporal worker registered workflows and activities. Starting..."}
+2026/10/14 16:40:43 DEBUG Worker heartbeating configured, but server version does not support it.
+2026/10/14 16:40:43 INFO  Started Worker Namespace default TaskQueue vtx-task-queue WorkerID 2846103@vif@
+2026/10/14 16:40:45 INFO  Starting SampleWorkflow Namespace default TaskQueue vtx-task-queue WorkerID 2846103@vif@ WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 Attempt 1 task_id e2e-restart-1791970845
+2026/10/14 16:40:45 DEBUG ExecuteActivity Namespace default TaskQueue vtx-task-queue WorkerID 2846103@vif@ WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 Attempt 1 ActivityID 5 ActivityType SampleActivity
+2026/10/14 16:40:45 INFO  Starting SampleActivity Namespace default TaskQueue vtx-task-queue WorkerID 2846103@vif@ ActivityID 5 ActivityType SampleActivity Attempt 1 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 task_id e2e-restart-1791970845
+2026/10/14 16:40:45 INFO  Processing activity step Namespace default TaskQueue vtx-task-queue WorkerID 2846103@vif@ ActivityID 5 ActivityType SampleActivity Attempt 1 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 step_index 0 step_name 1-prepare-sandbox
+2026/10/14 16:40:46 INFO  Processing activity step Namespace default TaskQueue vtx-task-queue WorkerID 2846103@vif@ ActivityID 5 ActivityType SampleActivity Attempt 1 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 step_index 1 step_name 2-execute-code-change
+{"time":"2026-10-14T16:40:48.584535686+07:00","level":"INFO","msg":"Starting VTX Temporal Worker","host":"localhost:49233","queue":"vtx-task-queue"}
+{"time":"2026-10-14T16:40:48.635511458+07:00","level":"INFO","msg":"Temporal worker registered workflows and activities. Starting..."}
+2026/10/14 16:40:48 DEBUG Worker heartbeating configured, but server version does not support it.
+2026/10/14 16:40:48 INFO  Started Worker Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@
+2026/10/14 16:40:52 INFO  Starting SampleActivity Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@ ActivityID 5 ActivityType SampleActivity Attempt 2 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 task_id e2e-restart-1791970845
+2026/10/14 16:40:52 INFO  Resuming activity from heartbeat Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@ ActivityID 5 ActivityType SampleActivity Attempt 2 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 start_index 1
+2026/10/14 16:40:52 INFO  Processing activity step Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@ ActivityID 5 ActivityType SampleActivity Attempt 2 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 step_index 1 step_name 2-execute-code-change
+2026/10/14 16:40:53 INFO  Processing activity step Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@ ActivityID 5 ActivityType SampleActivity Attempt 2 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 step_index 2 step_name 3-run-verification
+2026/10/14 16:40:54 INFO  Processing activity step Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@ ActivityID 5 ActivityType SampleActivity Attempt 2 WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 step_index 3 step_name 4-publish-results
+2026/10/14 16:40:59 INFO  SampleWorkflow completed successfully Namespace default TaskQueue vtx-task-queue WorkerID 2846426@vif@ WorkflowType SampleWorkflow WorkflowID sample-workflow-e2e-restart-1791970845 RunID 3a9b9a13-171e-494d-a106-9fb55666ee52 Attempt 1 task_id e2e-restart-1791970845 duration 14.477925756s
+------------------- Client Log Snippet -------------------
+🚀 Triggering Temporal Workflow for Task: e2e-restart-1791970845
+Connecting to Temporal at localhost:49233 (namespace: default, queue: vtx-task-queue)...
+✅ Workflow Started successfully!
+   WorkflowID: sample-workflow-e2e-restart-1791970845
+   RunID:      3a9b9a13-171e-494d-a106-9fb55666ee52
+⏳ Waiting for workflow completion...
+🎉 Workflow Completed!
+   Completed Steps: [1-prepare-sandbox 2-execute-code-change 3-run-verification 4-publish-results]
+   Duration:        14.477925756s
+----------------------------------------------------------
+  ✅ PASS: Found 'Resuming activity from heartbeat' in worker log.
+  ✅ PASS: Workflow reached COMPLETED state with all steps executed.
+
+🎉 E2E Temporal Worker Restart & Heartbeat Recovery PASSED (Evidence captured in tests/evidence/temporal-restart-recovery.log).

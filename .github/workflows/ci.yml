@@ -150,6 +150,7 @@ jobs:
   gate:
     name: Required Status Checks Gate
     needs:
+      - filter
       - boundary-check
       - backend-ci
       - web-ci
@@ -159,12 +160,67 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate pipeline gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BOUNDARY_RES: ${{ needs.boundary-check.result }}
+          BACKEND_RES: ${{ needs.backend-ci.result }}
+          BACKEND_TRIGGER: ${{ needs.filter.outputs.backend }}
+          WEB_RES: ${{ needs.web-ci.result }}
+          WEB_TRIGGER: ${{ needs.filter.outputs.web }}
+          AGENT_RES: ${{ needs.agent-ci.result }}
+          AGENT_TRIGGER: ${{ needs.filter.outputs.agent }}
+          CONTRACT_RES: ${{ needs.contract-conformance.result }}
+          CONTRACT_TRIGGER: ${{ needs.filter.outputs.contracts }}
         run: |
-          results="${{ join(needs.*.result, ' ') }}"
-          echo "Pipeline job results: $results"
-          if echo "$results" | grep -E -q 'failure|cancelled'; then
+          echo "Evaluating CI Status Checks Gate..."
+          echo "Event: $EVENT_NAME"
+          echo "Boundary Check Result: $BOUNDARY_RES"
+          echo "Backend Result: $BACKEND_RES (Triggered: $BACKEND_TRIGGER)"
+          echo "Web Result: $WEB_RES (Triggered: $WEB_TRIGGER)"
+          echo "Agent Result: $AGENT_RES (Triggered: $AGENT_TRIGGER)"
+          echo "Contract Result: $CONTRACT_RES (Triggered: $CONTRACT_TRIGGER)"
+
+          FAILED=0
+
+          check_job() {
+            local name="$1"
+            local res="$2"
+            local trigger="$3"
+
+            if [ "$res" = "failure" ] || [ "$res" = "cancelled" ]; then
+              echo "❌ $name failed with status $res"
+              FAILED=1
+            elif [ "$res" = "skipped" ]; then
+              if [ "$EVENT_NAME" = "push" ] || [ "$trigger" = "true" ]; then
+                echo "❌ $name was skipped abnormally when it was required to run"
+                FAILED=1
+              else
+                echo "ℹ️  $name safely skipped (no path changes)"
+              fi
+            elif [ "$res" = "success" ]; then
+              echo "✅ $name passed"
+            else
+              echo "❌ $name returned unexpected status: $res"
+              FAILED=1
+            fi
+          }
+
+          if [ "$BOUNDARY_RES" != "success" ]; then
+            echo "❌ boundary-check is mandatory and must succeed (status: $BOUNDARY_RES)"
+            FAILED=1
+          else
+            echo "✅ boundary-check passed"
+          fi
+
+          check_job "backend-ci" "$BACKEND_RES" "$BACKEND_TRIGGER"
+          check_job "web-ci" "$WEB_RES" "$WEB_TRIGGER"
+          check_job "agent-ci" "$AGENT_RES" "$AGENT_TRIGGER"
+          check_job "contract-conformance" "$CONTRACT_RES" "$CONTRACT_TRIGGER"
+
+          if [ $FAILED -ne 0 ]; then
             echo "❌ Pipeline check failed."
             exit 1
           fi
-          echo "✅ All required checks passed or were safely skipped."
+
+          echo "✅ All required checks passed or were safely skipped per path rules."
           exit 0

@@ -96,42 +96,67 @@ export default function DashboardPage() {
     };
   }, [loadData]);
 
-  // Connect to SSE stream
+  // Connect to SSE stream via fetch streaming with Authorization header (Security fix P2.1)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:49080";
-    let eventSource: EventSource | null = null;
+    const token = process.env.NEXT_PUBLIC_API_AUTH_TOKEN || "vtx-dev-secret-token-change-in-production";
+    const abortController = new AbortController();
 
-    try {
-      // Direct EventSource authenticated via query parameter for browser compatibility
-      const token = process.env.NEXT_PUBLIC_API_AUTH_TOKEN || "vtx-dev-secret-token-change-in-production";
-      eventSource = new EventSource(`${apiBase}/api/v1/events?token=${encodeURIComponent(token)}`);
-      eventSource.onmessage = (event) => {
-        if (isPaused) return;
-        try {
-          const parsed = JSON.parse(event.data) as PlatformEvent;
-          setEvents((prev) => [parsed, ...prev].slice(0, 50));
-        } catch {
-          // ignore parse errors
-        }
-      };
+    async function streamEvents(): Promise<void> {
+      try {
+        const response = await fetch(`${apiBase}/api/v1/events`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "text/event-stream",
+          },
+          signal: abortController.signal,
+        });
 
-      eventSource.addEventListener("system.heartbeat", (event: MessageEvent) => {
-        if (isPaused) return;
-        try {
-          const parsed = JSON.parse(event.data) as PlatformEvent;
-          setEvents((prev) => [parsed, ...prev].slice(0, 50));
-        } catch {
-          // ignore
+        if (!response.ok || !response.body) {
+          return;
         }
-      });
-    } catch {
-      // Fallback: EventSource fails gracefully if unauthenticated or offline
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split("\n\n");
+          buffer = blocks.pop() ?? "";
+
+          for (const block of blocks) {
+            const dataLine = block
+              .split("\n")
+              .find((line) => line.startsWith("data: "));
+            if (dataLine) {
+              const dataStr = dataLine.slice(6).trim();
+              if (dataStr && !isPaused) {
+                try {
+                  const parsed = JSON.parse(dataStr) as PlatformEvent;
+                  setEvents((prev) => [parsed, ...prev].slice(0, 50));
+                } catch {
+                  // ignore parse error
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // Fetch aborted or network disconnected gracefully
+      }
     }
 
+    void streamEvents();
+
     return () => {
-      eventSource?.close();
+      abortController.abort();
     };
   }, [isPaused]);
 

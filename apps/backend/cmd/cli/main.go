@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"go.temporal.io/sdk/client"
+
 	"github.com/vtx/platform/internal/config"
+	"github.com/vtx/platform/internal/orchestration"
 )
 
 func main() {
@@ -31,6 +34,25 @@ func main() {
 			fmt.Println("Usage: platform worker status")
 			os.Exit(1)
 		}
+	case "workflow":
+		if len(os.Args) > 2 && os.Args[2] == "run" {
+			taskID := fmt.Sprintf("task-%d", time.Now().Unix())
+			failStep := 0
+			stepDelayMs := 0
+			if len(os.Args) > 3 {
+				taskID = os.Args[3]
+			}
+			if len(os.Args) > 4 {
+				_, _ = fmt.Sscanf(os.Args[4], "%d", &failStep)
+			}
+			if len(os.Args) > 5 {
+				_, _ = fmt.Sscanf(os.Args[5], "%d", &stepDelayMs)
+			}
+			runWorkflow(taskID, failStep, stepDelayMs)
+		} else {
+			fmt.Println("Usage: platform workflow run [task_id] [fail_step] [step_delay_ms]")
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("VTX Platform CLI v1.0.0 (%s/%s)\n", runtime.GOOS, runtime.GOARCH)
 	case "help", "--help", "-h":
@@ -48,8 +70,8 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  platform doctor          Run developer environment and dependency checks")
 	fmt.Println("  platform worker status   Show Temporal worker status and configuration")
+	fmt.Println("  platform workflow run    Trigger and observe a sample Temporal workflow")
 	fmt.Println("  platform version         Show CLI version information")
-	fmt.Println("  platform help            Show this help message")
 }
 
 func runDoctor() {
@@ -158,6 +180,57 @@ func runWorkerStatus() {
 		fmt.Println("Temporal State:  ONLINE")
 	}
 	fmt.Println("==================================================")
+}
+
+func runWorkflow(taskID string, failStep int, stepDelayMs int) {
+	cfg := config.Load()
+	fmt.Printf("🚀 Triggering Temporal Workflow for Task: %s\n", taskID)
+	fmt.Printf("Connecting to Temporal at %s (namespace: %s, queue: %s)...\n", cfg.TemporalHostPort, cfg.TemporalNamespace, cfg.TemporalQueue)
+
+	c, err := client.Dial(client.Options{
+		HostPort:  cfg.TemporalHostPort,
+		Namespace: cfg.TemporalNamespace,
+	})
+	if err != nil {
+		fmt.Printf("❌ Failed to connect to Temporal: %v\n", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+
+	workflowOptions := client.StartWorkflowOptions{
+		ID:        "sample-workflow-" + taskID,
+		TaskQueue: cfg.TemporalQueue,
+	}
+
+	input := orchestration.SampleWorkflowInput{
+		TaskID:      taskID,
+		Steps:       []string{"1-prepare-sandbox", "2-execute-code-change", "3-run-verification", "4-publish-results"},
+		FailStep:    failStep,
+		StepDelayMs: stepDelayMs,
+	}
+
+	ctx := context.Background()
+	we, err := c.ExecuteWorkflow(ctx, workflowOptions, orchestration.SampleWorkflow, input)
+	if err != nil {
+		fmt.Printf("❌ Failed to start workflow: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Workflow Started successfully!\n")
+	fmt.Printf("   WorkflowID: %s\n", we.GetID())
+	fmt.Printf("   RunID:      %s\n", we.GetRunID())
+	fmt.Println("⏳ Waiting for workflow completion...")
+
+	var output orchestration.SampleWorkflowOutput
+	err = we.Get(ctx, &output)
+	if err != nil {
+		fmt.Printf("❌ Workflow execution failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("🎉 Workflow Completed!\n")
+	fmt.Printf("   Completed Steps: %v\n", output.CompletedSteps)
+	fmt.Printf("   Duration:        %s\n", output.TotalDuration)
 }
 
 func checkTCP(addr string, timeout time.Duration) bool {

@@ -9,9 +9,10 @@ import (
 )
 
 type SampleActivityInput struct {
-	TaskID   string   `json:"task_id"`
-	Steps    []string `json:"steps"`
-	FailStep int      `json:"fail_step"`
+	TaskID      string   `json:"task_id"`
+	Steps       []string `json:"steps"`
+	FailStep    int      `json:"fail_step"`
+	StepDelayMs int      `json:"step_delay_ms,omitempty"`
 }
 
 type SampleActivityOutput struct {
@@ -51,10 +52,15 @@ func SampleActivity(ctx context.Context, input SampleActivityInput) (SampleActiv
 		logger.Info("Processing activity step", "step_index", i, "step_name", stepName)
 
 		// Simulate activity step work
-		time.Sleep(10 * time.Millisecond)
+		stepDelay := 10 * time.Millisecond
+		if input.StepDelayMs > 0 {
+			stepDelay = time.Duration(input.StepDelayMs) * time.Millisecond
+		}
+		time.Sleep(stepDelay)
 
-		// Simulate transient failure on specified step if configured and not yet retried
-		if input.FailStep > 0 && i == input.FailStep && startIndex <= input.FailStep {
+		// Simulate transient failure on specified step only on first attempt to prove retry & resume
+		if input.FailStep > 0 && i == input.FailStep && activity.GetInfo(ctx).Attempt == 1 {
+			logger.Warn("Simulating transient step failure on attempt 1", "step", i)
 			return SampleActivityOutput{}, fmt.Errorf("transient failure at step %d for retry verification", i)
 		}
 

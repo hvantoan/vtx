@@ -231,11 +231,7 @@ func (s *Supervisor) Call(ctx context.Context, method string, params any, result
 	}
 }
 
-func (s *Supervisor) Notify(method string, params any) error {
-	if s.closed.Load() {
-		return errors.New("agent supervisor is closed")
-	}
-
+func (s *Supervisor) sendNotification(method string, params any) error {
 	notif := JsonRpcNotification{
 		JsonRpc: "2.0",
 		Method:  method,
@@ -249,8 +245,18 @@ func (s *Supervisor) Notify(method string, params any) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stdin == nil {
+		return errors.New("stdin is nil or closed")
+	}
 	_, err = fmt.Fprintf(s.stdin, "%s\n", string(payload))
 	return err
+}
+
+func (s *Supervisor) Notify(method string, params any) error {
+	if s.closed.Load() {
+		return errors.New("agent supervisor is closed")
+	}
+	return s.sendNotification(method, params)
 }
 
 func (s *Supervisor) Events() <-chan TaskEvent {
@@ -269,13 +275,16 @@ func (s *Supervisor) readStdoutLoop() {
 		// B3: Drain pending channels and close event stream when loop terminates
 		s.mu.Lock()
 		for id, ch := range s.respChans {
-			ch <- JsonRpcResponse{
+			select {
+			case ch <- JsonRpcResponse{
 				JsonRpc: "2.0",
 				ID:      id,
 				Error: &JsonRpcError{
 					Code:    -32000,
 					Message: "agent process stdout closed",
 				},
+			}:
+			default:
 			}
 		}
 		clear(s.respChans)
@@ -318,7 +327,10 @@ func (s *Supervisor) readStdoutLoop() {
 			ch, exists := s.respChans[resp.ID]
 			s.mu.Unlock()
 			if exists {
-				ch <- resp
+				select {
+				case ch <- resp:
+				default:
+				}
 			}
 		}
 	}
@@ -347,19 +359,30 @@ func (s *Supervisor) Close() error {
 		return nil
 	}
 
-	// Send shutdown notification
-	_ = s.Notify("shutdown", map[string]any{})
-	_ = s.stdin.Close()
+	// Send graceful shutdown notification before closing stdin
+	_ = s.sendNotification("shutdown", map[string]any{})
 
-	// Terminate process group cleanly
-	if s.pgid > 0 {
-		_ = syscall.Kill(-s.pgid, syscall.SIGTERM)
+	// Close stdin pipe to trigger EOF in child process
+	s.mu.Lock()
+	if s.stdin != nil {
+		_ = s.stdin.Close()
 	}
+	s.mu.Unlock()
 
 	done := make(chan error, 1)
 	go func() {
 		done <- s.cmd.Wait()
 	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(500 * time.Millisecond):
+		// Escalate to SIGTERM for process group
+		if s.pgid > 0 {
+			_ = syscall.Kill(-s.pgid, syscall.SIGTERM)
+		}
+	}
 
 	select {
 	case err := <-done:

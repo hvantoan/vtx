@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	enums "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )
 
@@ -38,6 +39,19 @@ func (t *TemporalClient) Ping(ctx context.Context) (time.Duration, error) {
 	}
 
 	return latency, nil
+}
+
+func (t *TemporalClient) CheckWorkers(ctx context.Context, queue string) (bool, error) {
+	if t == nil || t.Client == nil {
+		return false, fmt.Errorf("temporal client is nil")
+	}
+
+	resp, err := t.Client.DescribeTaskQueue(ctx, queue, enums.TASK_QUEUE_TYPE_WORKFLOW)
+	if err != nil {
+		return false, fmt.Errorf("failed to describe task queue: %w", err)
+	}
+
+	return len(resp.Pollers) > 0, nil
 }
 
 func (t *TemporalClient) Close() {

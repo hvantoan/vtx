@@ -4,6 +4,7 @@ import { logStderr } from "../protocol/framing.js";
 export interface AgentAdapter {
   readonly name: "pi" | "omp";
   readonly version: string;
+  readonly isSimulation: boolean;
   execute(
     params: TaskExecuteParams,
     onEvent: (event: { event_type: "stdout" | "stderr" | "progress" | "status_change"; payload: string }) => void,
@@ -11,10 +12,18 @@ export interface AgentAdapter {
   ): Promise<TaskExecuteResult>;
 }
 
+/**
+ * PiAgentAdapter (Simulation Double for Bootstrap phase)
+ *
+ * NOTE: In Phase 0 Bootstrap (VTX-14), this adapter operates as an IPC protocol double
+ * to verify NDJSON framing, bidirectional event streaming, cancellation (AbortSignal),
+ * backpressure, and process isolation.
+ * Real agent execution (Pi CLI/SDK binary orchestration) is formally deferred to VTX-7.
+ */
 export class PiAgentAdapter implements AgentAdapter {
   readonly name = "pi" as const;
   readonly version = "1.0.0";
-
+  readonly isSimulation = true;
   async execute(
     params: TaskExecuteParams,
     onEvent: (event: { event_type: "stdout" | "stderr" | "progress" | "status_change"; payload: string }) => void,

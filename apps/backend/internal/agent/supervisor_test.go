@@ -124,3 +124,60 @@ func TestSupervisor_RealNodeHost_OMP(t *testing.T) {
 	assert.Equal(t, "succeeded", result.Status)
 	assert.Contains(t, result.Output, "OMP agent successfully completed")
 }
+
+func TestSupervisor_GracefulShutdownNotification(t *testing.T) {
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "shutdown_received.marker")
+
+	script := `#!/usr/bin/env bash
+while IFS= read -r line; do
+  if echo "$line" | grep -q '"method":"initialize"'; then
+    id=$(echo "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocol_version\":\"1.0\",\"agent_type\":\"pi\",\"agent_version\":\"1.0.0\",\"capabilities\":{}}}"
+  elif echo "$line" | grep -q '"method":"shutdown"'; then
+    touch "` + markerPath + `"
+    exit 0
+  fi
+done
+`
+	scriptPath := filepath.Join(tmpDir, "shutdown_agent.sh")
+	err := os.WriteFile(scriptPath, []byte(script), 0755)
+	require.NoError(t, err)
+
+	logger := observability.SetupLogger("error")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sup, err := agent.Spawn(ctx, scriptPath, nil, "pi", logger)
+	require.NoError(t, err)
+
+	// Call Close and assert that shutdown notification was received by process before exit
+	err = sup.Close()
+	require.NoError(t, err)
+
+	assert.FileExists(t, markerPath, "Agent process must receive shutdown notification before termination")
+}
+
+func TestSupervisor_ConcurrentCancel(t *testing.T) {
+	scriptPath := createMockAgentScript(t)
+	logger := observability.SetupLogger("error")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sup, err := agent.Spawn(ctx, scriptPath, nil, "pi", logger)
+	require.NoError(t, err)
+	defer sup.Close()
+
+	done := make(chan struct{})
+	for i := range 10 {
+		go func(id int) {
+			_ = sup.CancelTask("task-concurrent", "user request")
+			done <- struct{}{}
+		}(i)
+	}
+
+	for range 10 {
+		<-done
+	}
+}
