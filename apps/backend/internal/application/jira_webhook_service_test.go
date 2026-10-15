@@ -179,7 +179,7 @@ func TestIdentityMismatchRejected(t *testing.T) {
 	cleanupKeys(t, pool)
 	defer cleanupKeys(t, pool)
 
-	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{ProjectKey: "OTHER", StatusID: "10007"}}
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "OTHER", StatusID: "10007"}}
 	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
 
@@ -197,12 +197,74 @@ func TestIdentityMismatchRejected(t *testing.T) {
 	assert.Equal(t, 0, intents)
 }
 
+// TestForgedIssueKeyRejected proves the review P1 fix: the payload claims
+// issue.key VTX-999 on a real issue.id, but Jira's authoritative key is
+// VTX-2 — identity mismatch, no intent under the forged key.
+func TestForgedIssueKeyRejected(t *testing.T) {
+	pool := testPool(t)
+	cleanupKeys(t, pool)
+	defer cleanupKeys(t, pool)
+
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10007"}}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
+	env, raw := loadFixture(t, "webhook_valid_transition.json")
+	env.Issue.Key = "VTX-999" // forged display key on a valid issue.id
+
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-fk", testReceivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, application.DispositionIgnoredScope, res.Disposition)
+	assert.Equal(t, application.ReasonIdentityMismatch, res.ReasonCode)
+
+	var outcome string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='20001'`).Scan(&outcome))
+	assert.Equal(t, "ignored_scope", outcome)
+
+	var forged, intents int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-999'`).Scan(&forged))
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-2'`).Scan(&intents))
+	assert.Equal(t, 0, forged, "no intent under the forged key")
+	assert.Equal(t, 0, intents)
+}
+
+// TestStatusDriftBetweenStartStatuses proves the review P1 fix: with two
+// configured start statuses, a webhook claiming entry into 10007 is stale
+// when Jira says the issue already sits in 10008 — even though 10008 is also
+// an allowed start status. The claimed target must equal the current status.
+func TestStatusDriftBetweenStartStatuses(t *testing.T) {
+	pool := testPool(t)
+	cleanupKeys(t, pool)
+	defer cleanupKeys(t, pool)
+
+	cfg := &config.Config{
+		JiraSiteID: "vtxsolution.atlassian.net",
+		JiraProjects: map[string]config.JiraProjectConfig{
+			"VTX": {StartStatusIDs: []string{"10007", "10008"}},
+		},
+	}
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10008"}}
+	svc := application.NewJiraWebhookService(cfg, pool, db.New(pool), fetcher, slog.Default())
+	env, raw := loadFixture(t, "webhook_valid_transition.json")
+
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-sd", testReceivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, application.DispositionIgnoredStale, res.Disposition)
+	assert.Equal(t, application.ReasonStatusDrift, res.ReasonCode)
+
+	var outcome string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='20001'`).Scan(&outcome))
+	assert.Equal(t, "ignored_stale", outcome)
+
+	var intents int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-2'`).Scan(&intents))
+	assert.Equal(t, 0, intents)
+}
+
 func TestAcceptedThenDuplicate(t *testing.T) {
 	pool := testPool(t)
 	cleanupKeys(t, pool)
 	defer cleanupKeys(t, pool)
 
-	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{ProjectKey: "VTX", StatusID: "10007"}}
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10007"}}
 	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
@@ -231,7 +293,7 @@ func TestConcurrentDuplicateDelivery(t *testing.T) {
 	cleanupKeys(t, pool)
 	defer cleanupKeys(t, pool)
 
-	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{ProjectKey: "VTX", StatusID: "10007"}}
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10007"}}
 	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
 
@@ -297,7 +359,7 @@ func TestStaleAndScopePathsWriteTerminalRows(t *testing.T) {
 	ctx := context.Background()
 
 	// Stale: Jira says the issue already left Ready to Dev.
-	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{ProjectKey: "VTX", StatusID: "10005"}}
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10005"}}
 	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
 	res, err := svc.ProcessWebhookTransition(ctx, env, raw, "req-s", testReceivedAt)

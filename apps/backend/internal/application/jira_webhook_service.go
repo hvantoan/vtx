@@ -151,27 +151,33 @@ func (s *JiraWebhookService) ProcessWebhookTransition(ctx context.Context, env *
 
 	// --- Authority re-fetch: the live Jira API is the only truth about issue
 	// identity and current status. Webhook payload fields are hints, never
-	// proof — a forged payload claiming project VTX for an OTHER-project
-	// issue is caught here.
+	// proof — a forged payload claiming project VTX (or a forged issue.key on
+	// a real issue.id) is caught here.
 	fetched, err := s.jira.FetchIssue(ctx, env.Issue.ID)
 	if err != nil {
 		// Retryable path: return BEFORE any inbox insert so the event key
 		// remains unclaimed for Jira's redelivery.
 		return Result{}, fmt.Errorf("jira re-fetch failed: %w", err)
 	}
-	if fetched.ID != env.Issue.ID || fetched.ProjectKey != projectKey {
+	if fetched.ID != env.Issue.ID || fetched.Key != env.Issue.Key || fetched.ProjectKey != projectKey {
 		s.logger.Warn("jira webhook identity mismatch — forged or corrupt payload",
 			slog.String("request_id", requestID),
 			slog.String("claimed_issue_id", env.Issue.ID),
+			slog.String("claimed_issue_key", env.Issue.Key),
 			slog.String("claimed_project", projectKey),
 			slog.String("fetched_issue_id", fetched.ID),
+			slog.String("fetched_issue_key", fetched.Key),
 			slog.String("fetched_project", fetched.ProjectKey))
 		if err := s.insertTerminalInbox(ctx, eventKey, env.Issue.Key, DispositionIgnoredScope, hashHex, requestID); err != nil {
 			return Result{}, err
 		}
 		return Result{Disposition: DispositionIgnoredScope, ReasonCode: ReasonIdentityMismatch}, nil
 	}
-	if !slices.Contains(startIDs, fetched.StatusID) {
+	// Stale-transition gate: the claimed target status must be the issue's
+	// CURRENT status. With multiple configured start statuses, "any start
+	// status" would still pass while the issue already moved past this
+	// transition — firing an intent for a change that never landed.
+	if fetched.StatusID != targetStatusID {
 		if err := s.insertTerminalInbox(ctx, eventKey, env.Issue.Key, DispositionIgnoredStale, hashHex, requestID); err != nil {
 			return Result{}, err
 		}

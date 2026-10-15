@@ -33,6 +33,7 @@ const requestBudget = 3 * time.Second
 // the service compares every field against the untrusted webhook payload.
 type FetchedIssue struct {
 	ID         string
+	Key        string
 	ProjectKey string
 	StatusID   string
 }
@@ -118,6 +119,7 @@ func ValidateIssueKey(key string) error {
 
 type issueResponse struct {
 	ID     string `json:"id"`
+	Key    string `json:"key"`
 	Fields struct {
 		Status struct {
 			ID   string `json:"id"`
@@ -130,12 +132,12 @@ type issueResponse struct {
 }
 
 // FetchIssue re-fetches the issue and returns its authoritative identity —
-// issue ID, project key, and current status ID. The caller compares all three
-// against the webhook payload; trusting payload fields alone is what allowed
-// forged transitions (review P1-2). Any transport or non-2xx failure is
-// wrapped in ErrRetryable (caller returns 503, no dedup claim); so is a 200
-// body whose id/project/status fields are missing or mismatched — a Jira
-// anomaly we redeliver rather than silently trust.
+// issue ID, key, project key, and current status ID. The caller compares all
+// four against the webhook payload; trusting payload fields alone is what
+// allowed forged transitions (review P1-2). Any transport or non-2xx failure
+// is wrapped in ErrRetryable (caller returns 503, no dedup claim); so is a
+// 200 body whose id/key/project/status fields are missing or mismatched — a
+// Jira anomaly we redeliver rather than silently trust.
 func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, error) {
 	if err := ValidateIssueID(issueID); err != nil {
 		return FetchedIssue{}, err
@@ -176,6 +178,9 @@ func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, 
 	if body.ID == "" || body.ID != issueID {
 		return FetchedIssue{}, fmt.Errorf("%w: issue response id %q does not match requested %q", ErrRetryable, body.ID, issueID)
 	}
+	if body.Key == "" {
+		return FetchedIssue{}, fmt.Errorf("%w: issue response missing key", ErrRetryable)
+	}
 	if body.Fields.Project.Key == "" {
 		return FetchedIssue{}, fmt.Errorf("%w: issue response missing project.key", ErrRetryable)
 	}
@@ -184,6 +189,7 @@ func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, 
 	}
 	return FetchedIssue{
 		ID:         body.ID,
+		Key:        body.Key,
 		ProjectKey: body.Fields.Project.Key,
 		StatusID:   body.Fields.Status.ID,
 	}, nil
