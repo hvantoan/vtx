@@ -59,6 +59,13 @@ func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Han
 	}
 }
 
+// GatewayAuthMiddleware guards the Jira webhook intake on the dedicated
+// internal token injected by the Nginx gateway — provably separate from the
+// public dashboard API_AUTH_TOKEN (asserted at startup in config.Validate).
+func GatewayAuthMiddleware(internalToken string) func(next http.Handler) http.Handler {
+	return BearerAuthMiddleware(internalToken)
+}
+
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int

@@ -59,7 +59,6 @@ services:
     build:
       context: ../../apps/backend
       dockerfile: Dockerfile
-    container_name: vtx-backend
     restart: unless-stopped
     depends_on:
       postgres:
@@ -75,8 +74,35 @@ services:
       - TEMPORAL_NAMESPACE=default
       - TEMPORAL_TASK_QUEUE=vtx-task-queue
       - API_AUTH_TOKEN=vtx-dev-secret-token-change-in-production
+      - JIRA_BASE_URL=${JIRA_BASE_URL}
+      - JIRA_API_EMAIL=${JIRA_API_EMAIL}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      - JIRA_PROJECT_ALLOWLIST=${JIRA_PROJECT_ALLOWLIST}
+      - JIRA_READY_TO_DEV_STATUS_ID=${JIRA_READY_TO_DEV_STATUS_ID}
+      - JIRA_SITE_ID=${JIRA_SITE_ID}
+      - GATEWAY_INTERNAL_AUTH_TOKEN=${GATEWAY_INTERNAL_AUTH_TOKEN}
     ports:
       - "${VTX_API_PORT:-49080}:49080"
+
+  gateway:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Allowlist envsubst: only the four vars below are substituted into
+    # templates — every other $token stays an nginx runtime variable.
+    environment:
+      - WEBHOOK_PATH_SECRET_PRIMARY=${WEBHOOK_PATH_SECRET_PRIMARY}
+      - WEBHOOK_PATH_SECRET_SECONDARY=${WEBHOOK_PATH_SECRET_SECONDARY:-}
+      - GATEWAY_INTERNAL_AUTH_TOKEN=${GATEWAY_INTERNAL_AUTH_TOKEN}
+      - VTX_API_PORT=49080
+      - NGINX_ENVSUBST_FILTER=^(WEBHOOK_PATH_SECRET_|GATEWAY_INTERNAL_AUTH_TOKEN|VTX_API_PORT)
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "${VTX_GATEWAY_PORT:-49443}:443"
+
 
   web:
     build:
@@ -92,5 +118,8 @@ services:
     ports:
       - "${VTX_WEB_PORT:-49030}:49030"
 
+networks:
+  default:
+    name: vtx_net
 volumes:
   postgres_data:

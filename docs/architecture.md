@@ -129,3 +129,19 @@
 4. **Rule 4 (Docker Socket Isolation):** Web application must never mount or have access to `/var/run/docker.sock`.
 5. **Rule 5 (Workflow Determinism):** Go workflows in `internal/orchestration/workflows` must remain strictly deterministic. Network, DB, file system, process execution, and non-deterministic logic must reside exclusively in Activities.
 6. **Rule 6 (Process Group Cleanup):** Go agent supervisor must spawn child Node processes with `Setpgid: true` and terminate the entire process group upon cancellation or timeout to prevent orphaned processes.
+
+---
+
+## 4. Jira Webhook Intake — Two-Layer Auth (VTX-2, SPEC-AUTO-01 Amendment 01)
+
+Jira Cloud Free administrative webhooks cannot send custom `Authorization` headers or HMAC signatures. Ingress therefore uses two independent credential layers:
+
+```
+Jira Cloud ──HTTPS──▶ Nginx Gateway (:49443) ──internal HTTP──▶ Go backend (:49080)
+              layer 1: URL path secret                layer 2: Bearer GATEWAY_INTERNAL_AUTH_TOKEN
+```
+
+- **Layer 1 — URL path secret (Nginx).** Jira posts to `https://<host>/webhooks/<secret>/jira`. An envsubst-templated `map` compares the path segment against `WEBHOOK_PATH_SECRET_PRIMARY`/`_SECONDARY` (rotation overlap); mismatch → `403` before any proxying. `rewrite … break` strips the secret so it never reaches Go logs or upstream services.
+- **Layer 2 — injected internal token (Go).** The gateway unconditionally overwrites `Authorization` with `Bearer ${GATEWAY_INTERNAL_AUTH_TOKEN}` (client-supplied values are dropped, never forwarded). `GatewayAuthMiddleware` constant-time compares against `cfg.GatewayInternalAuthToken`.
+- **Token separation is mandatory.** `API_AUTH_TOKEN` ships to every browser bundle (`NEXT_PUBLIC_API_AUTH_TOKEN`), so the webhook route must never reuse it. `config.Validate()` fails startup if `GATEWAY_INTERNAL_AUTH_TOKEN` is empty or equals `API_AUTH_TOKEN`.
+- **Published port is retained.** `${VTX_API_PORT}:49080` stays published for the dashboard (browser SSE/REST calls `http://localhost:49080`). Webhook protection comes from layer 2, not from hiding the port.

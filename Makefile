@@ -118,14 +118,19 @@ migrate-status:
 # ------------------------------------------------------------------------------
 # Docker Compose Management
 # ------------------------------------------------------------------------------
+COMPOSE_FILE := infra/compose/docker-compose.yml
+# docker compose -f <path> does not auto-load the repo-root .env — pass it
+# explicitly so ${JIRA_*} / ${GATEWAY_*} / ${WEBHOOK_*} interpolation resolves.
+COMPOSE_ENV := $(if $(wildcard .env),--env-file .env,)
+
 compose-up:
-	@docker compose -f infra/compose/docker-compose.yml up -d
+	@docker compose $(COMPOSE_ENV) -f $(COMPOSE_FILE) up -d
 
 compose-down:
-	@docker compose -f infra/compose/docker-compose.yml down
+	@docker compose $(COMPOSE_ENV) -f $(COMPOSE_FILE) down
 
 compose-logs:
-	@docker compose -f infra/compose/docker-compose.yml logs -f
+	@docker compose $(COMPOSE_ENV) -f $(COMPOSE_FILE) logs -f
 
 # ------------------------------------------------------------------------------
 # Cleanup

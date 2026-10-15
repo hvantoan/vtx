@@ -1,0 +1,94 @@
+# ==============================================================================
+# VTX Secure Webhook Gateway (SPEC-AUTO-01 Amendment 01)
+# Rendered by the official nginx image's envsubst hook from
+# /etc/nginx/templates/. Only these variables are substituted:
+#   WEBHOOK_PATH_SECRET_PRIMARY, WEBHOOK_PATH_SECRET_SECONDARY,
+#   GATEWAY_INTERNAL_AUTH_TOKEN, VTX_API_PORT
+# All other $-prefixed tokens remain nginx variables at runtime.
+# ==============================================================================
+
+# 48-hex-char secret keys exceed the default 64-byte map bucket.
+map_hash_bucket_size 128;
+
+# Layer-1 secret check: request URI must carry an active path secret.
+# The secret lives only in this map — it is never proxied, logged, or
+# forwarded. SECONDARY stays empty outside a rotation overlap window.
+map $uri $webhook_secret_ok {
+    default                                                    0;
+    /webhooks/${WEBHOOK_PATH_SECRET_PRIMARY}/jira              1;
+    ~^/webhooks/${WEBHOOK_PATH_SECRET_SECONDARY}/jira$         $secret_secondary_active;
+}
+
+# Secondary secret gate: an empty env value must never match, so the regex
+# above only fires while SECONDARY holds a real (non-empty) secret.
+map "${WEBHOOK_PATH_SECRET_SECONDARY}" $secret_secondary_active {
+    default   0;
+    ~^.+$     1;
+}
+
+# Log the URI with the path secret masked — the raw $request_uri must never
+# reach access logs, traces, or alerts.
+map $uri $masked_uri {
+    default                     $uri;
+    ~^/webhooks/[^/]+/(?<rest>.+)$   /webhooks/***/$rest;
+}
+
+log_format webhook_masked '$remote_addr - $remote_user [$time_local] '
+                          '"$request" $status $body_bytes_sent '
+                          '"$masked_uri" "$http_user_agent"';
+
+# Per-client rate limit on webhook ingress (spec §3.3).
+limit_req_zone $binary_remote_addr zone=jira_webhooks:10m rate=10r/s;
+
+# Re-resolve the backend per request — container IPs change across
+# scale/recreate events; a startup-cached upstream turns into 502s.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+server {
+    listen 443 ssl;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/certs/gateway.crt;
+    ssl_certificate_key /etc/nginx/certs/gateway.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    access_log /var/log/nginx/webhook_access.log webhook_masked;
+    error_log  /var/log/nginx/webhook_error.log warn;
+
+    # Webhook intake — path secret validated by the map above.
+    location ^~ /webhooks/ {
+        if ($webhook_secret_ok = 0) {
+            return 403;
+        }
+
+        limit_req zone=jira_webhooks burst=20 nodelay;
+
+        # Variable upstream forces per-request DNS (backend IPs change on
+        # scale/recreate). `set` must precede `rewrite … break` — break ends
+        # the rewrite phase, so a set placed after it never executes.
+        set $jira_upstream "http://backend:${VTX_API_PORT}";
+
+        # Strip the secret path segment; `break` keeps processing in this
+        # location so the URI-less proxy_pass below is valid inside the
+        # regex-matched location and the secret never reaches upstream.
+        rewrite ^/webhooks/[^/]+/jira$ /api/v1/integrations/jira/webhooks break;
+
+        # Layer-2: inject the internal token, discarding whatever the client
+        # sent (proxy_set_header replaces, never forwards).
+        proxy_set_header Authorization "Bearer ${GATEWAY_INTERNAL_AUTH_TOKEN}";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
+        proxy_pass $jira_upstream;
+    }
+
+    # Everything else on this gateway is closed.
+    location / {
+        return 404;
+    }
+}

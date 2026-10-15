@@ -1,0 +1,43 @@
+{
+  "timestamp": 1760500004000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "issue": {
+    "id": "10015",
+    "key": "VTX-5",
+    "self": "https://vtxsolution.atlassian.net/rest/api/3/issue/10015",
+    "fields": {
+      "project": {
+        "id": "10000",
+        "key": "VTX"
+      },
+      "status": {
+        "id": "10000",
+        "name": "To Do"
+      }
+    }
+  },
+  "changelog": {
+    "id": "20005",
+    "items": [
+      {
+        "field": "comment",
+        "fieldtype": "jira",
+        "fieldId": "comment",
+        "from": null,
+        "fromString": null,
+        "to": null,
+        "toString": "Added a comment"
+      },
+      {
+        "field": "labels",
+        "fieldtype": "jira",
+        "fieldId": "labels",
+        "from": "",
+        "fromString": "",
+        "to": "ai-automation",
+        "toString": "ai-automation"
+      }
+    ]
+  }
+}

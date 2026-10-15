@@ -1,0 +1,38 @@
+===================================================================
+ Jira Webhook Intake E2E — 2026-10-14T18:42:56Z
+ Stack: docker compose --env-file /home/vif/workspace/vtx/.env -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.e2e.yml --profile e2e
+===================================================================
+[setup] building + starting single-replica e2e stack
+--- Layer 1: gateway auth (JT-02) ---------------------------------
+PASS  JT-02 — wrong path secret -> 403 from nginx (HTTP 403)
+--- Layer 2: internal bearer token (JT-04, JT-05) ------------------
+PASS  JT-04 — no Authorization header -> 401 (HTTP 401)
+PASS  JT-05 — public API_AUTH_TOKEN rejected on webhook route -> 401 (HTTP 401)
+--- Ingress controls (JT-06, JT-07) -------------------------------
+PASS  JT-06 — text/plain Content-Type -> 400 (HTTP 400)
+PASS  JT-07 — payload >256 KiB -> 413 (HTTP 413)
+--- Ignorable traffic: 202, never penalized (JT-08, JT-15) ---------
+PASS  JT-08 — non-status issue_updated -> 202 ignored_scope
+PASS  JT-15 — missing changelog.id -> 202 (webhook-health policy overrides 422)
+--- Accepted path + idempotent duplicate (JT-01, JT-09) ------------
+PASS  JT-01 — accepted -> 202, 1 inbox + 1 intent + 1 outbox
+PASS  JT-09 — duplicate redelivery -> 200 same intent_id, still 1 intent
+PASS  JT-14 — re-entry (new changelog_id) -> NEW intent created
+--- Concurrency (JT-03a single replica, JT-03b two replicas) -------
+PASS  JT-03a — 8 parallel deliveries, 1 replica -> 1 intent (1x202 + 7x200)
+     note: backend replicas: 2
+PASS  JT-03b — 8 parallel deliveries, 2 replicas -> 1 intent
+--- Status verification & scope (JT-10, JT-16) --------------------
+PASS  JT-10 — stale transition (issue left Ready to Dev) -> ignored_stale, no intent
+PASS  JT-16 — project outside allowlist -> ignored_scope, no intent
+--- Retryable failures: 503, dedup key unclaimed (JT-11..JT-13) -----
+PASS  JT-11 — Jira 429 -> 503, zero inbox rows (key unclaimed)
+PASS  JT-12 — Jira 500 -> 503, zero inbox rows
+PASS  JT-13 — 503 then Jira redelivery -> accepted (recovery path works)
+--- Secret hygiene (JT-17) ----------------------------------------
+PASS  JT-17 — zero secret values and zero /webhooks/ paths in container logs
+--- Rotation overlap (JT-18) ---------------------------------------
+PASS  JT-18 — overlap: secondary activated + primary still accepted (no delivery loss)
+===================================================================
+ RESULT: 19 PASS / 0 FAIL  (of 19)
+ ALL CHECKS PASSED

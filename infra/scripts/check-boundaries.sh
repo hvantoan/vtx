@@ -73,8 +73,9 @@ if [ -d "apps/agent-runtime" ]; then
 fi
 
 # 6. Verify basic secret scanning (BS-11)
-SUSPICIOUS_SECRETS=$(grep -rnE "(ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]+|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----)" \
+SUSPICIOUS_SECRETS=$(grep -rnE "(ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)" \
     --exclude-dir=.git \
+    --exclude-dir=certs \
     --exclude-dir=node_modules \
     --exclude="*.md" \
     --exclude=".env.example" \

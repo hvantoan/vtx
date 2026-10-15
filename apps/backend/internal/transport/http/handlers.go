@@ -23,13 +23,14 @@ type WorkerChecker interface {
 }
 
 type Server struct {
-	cfg        *config.Config
-	logger     *slog.Logger
-	startTime  time.Time
-	db         DependencyChecker
-	temporal   DependencyChecker
-	sseClients map[chan domain.PlatformEvent]struct{}
-	sseMu      sync.RWMutex
+	cfg         *config.Config
+	logger      *slog.Logger
+	startTime   time.Time
+	db          DependencyChecker
+	temporal    DependencyChecker
+	sseClients  map[chan domain.PlatformEvent]struct{}
+	sseMu       sync.RWMutex
+	jiraWebhook JiraWebhookProcessor
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {

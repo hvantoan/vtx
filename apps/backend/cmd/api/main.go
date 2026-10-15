@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/config"
+	"github.com/vtx/platform/internal/integrations/jira"
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
 	"github.com/vtx/platform/internal/persistence"
@@ -21,6 +23,11 @@ import (
 func main() {
 	cfg := config.Load()
 	logger := observability.SetupLogger("info")
+
+	if err := cfg.Validate(); err != nil {
+		logger.Error("Invalid configuration", "error", err)
+		os.Exit(1)
+	}
 
 	logger.Info("Starting VTX Platform API",
 		slog.String("port", cfg.Port),
@@ -52,8 +59,26 @@ func main() {
 		defer temporalClient.Close()
 	}
 
+	// Jira webhook intake service (VTX-2). The API cannot serve the route
+	// correctly without a live DB pool — fail closed at startup rather than
+	// claim dedup keys it cannot persist.
+	var webhookSvc *application.JiraWebhookService
+	if db == nil {
+		logger.Warn("Jira webhook intake disabled until database connects")
+	} else {
+		jiraClient, err := jira.NewClient(cfg.JiraBaseURL, cfg.JiraAPIEmail, cfg.JiraAPIToken)
+		if err != nil {
+			logger.Error("Failed to build Jira client", "error", err)
+			os.Exit(1)
+		}
+		webhookSvc = application.NewJiraWebhookService(cfg, db.Pool, db.Queries, jiraClient, logger)
+	}
+
 	// Create HTTP Server
 	server := transporthttp.NewServer(cfg, logger, dbDep, temporalDep)
+	if webhookSvc != nil {
+		server.WithJiraWebhook(webhookSvc)
+	}
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 
 	httpServer := &http.Server{

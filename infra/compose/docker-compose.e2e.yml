@@ -1,0 +1,24 @@
+# E2E overrides for the Jira webhook test matrix (JT-01..JT-18).
+# Usage:
+#   docker compose --env-file .env \
+#     -f infra/compose/docker-compose.yml \
+#     -f infra/compose/docker-compose.e2e.yml \
+#     --profile e2e up -d
+# For JT-03 (multi-replica dedup) additionally pass
+#   -f infra/compose/docker-compose.e2e-scale.yml and --scale backend=2
+name: vtx
+
+services:
+  backend:
+    environment:
+      # Point re-fetch at the stub. Compose merges environment lists; the
+      # later JIRA_BASE_URL wins over the base file's value.
+      - JIRA_BASE_URL=${E2E_JIRA_BASE_URL:-http://jira-stub:8080}
+
+  jira-stub:
+    profiles: ["e2e"]
+    image: python:3.13-alpine
+    restart: unless-stopped
+    command: ["python", "/stub/stub.py"]
+    volumes:
+      - ./jira-stub/stub.py:/stub/stub.py:ro

@@ -1,0 +1,20 @@
+{
+  "timestamp": 1760500003000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "issue": {
+    "id": "10014",
+    "key": "VTX-4",
+    "self": "https://vtxsolution.atlassian.net/rest/api/3/issue/10014",
+    "fields": {
+      "project": {
+        "id": "10000",
+        "key": "VTX"
+      },
+      "status": {
+        "id": "10007",
+        "name": "Ready To Develope"
+      }
+    }
+  }
+}

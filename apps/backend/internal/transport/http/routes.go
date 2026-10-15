@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"time"
 )
 
 func (s *Server) Routes() http.Handler {
@@ -40,6 +41,15 @@ func (s *Server) Routes() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(BearerAuthMiddleware(s.cfg.AuthToken))
 			r.Get("/events", s.HandleSSE)
+		})
+
+		// Jira webhook intake: dedicated internal-token group, OUTSIDE the
+		// dashboard auth group above. The Nginx gateway injects
+		// GATEWAY_INTERNAL_AUTH_TOKEN; the public API token never opens it.
+		r.Group(func(r chi.Router) {
+			r.Use(chimw.Timeout(10 * time.Second))
+			r.Use(GatewayAuthMiddleware(s.cfg.GatewayInternalAuthToken))
+			r.Post("/integrations/jira/webhooks", s.HandleJiraWebhook)
 		})
 	})
 

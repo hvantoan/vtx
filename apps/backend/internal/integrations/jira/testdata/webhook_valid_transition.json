@@ -1,0 +1,44 @@
+{
+  "timestamp": 1760500000000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "issue": {
+    "id": "10011",
+    "key": "VTX-2",
+    "self": "https://vtxsolution.atlassian.net/rest/api/3/issue/10011",
+    "fields": {
+      "project": {
+        "id": "10000",
+        "key": "VTX",
+        "self": "https://vtxsolution.atlassian.net/rest/api/3/project/10000"
+      },
+      "status": {
+        "id": "10007",
+        "name": "Ready To Develope"
+      }
+    }
+  },
+  "changelog": {
+    "id": "20001",
+    "items": [
+      {
+        "field": "assignee",
+        "fieldtype": "jira",
+        "fieldId": "assignee",
+        "from": null,
+        "fromString": null,
+        "to": "557058:abc123",
+        "toString": "Hồ Văn Toàn"
+      },
+      {
+        "field": "status",
+        "fieldtype": "jira",
+        "fieldId": "status",
+        "from": "10000",
+        "fromString": "To Do",
+        "to": "10007",
+        "toString": "Ready To Develope"
+      }
+    ]
+  }
+}

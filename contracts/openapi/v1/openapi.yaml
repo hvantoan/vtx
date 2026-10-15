@@ -88,6 +88,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkerStatusResponse'
+  /api/v1/integrations/jira/webhooks:
+    post:
+      summary: Jira Webhook Intake
+      description: >
+        Receives Jira Cloud `jira:issue_updated` administrative webhook events,
+        deduplicates status transitions on
+        (jira_site_id, issue_id, changelog_id, target_status_id), and records
+        exactly one durable execution intent + outbox event per unique
+        transition to "Ready To Develope". Reachable only through the Nginx
+        webhook gateway, which injects the internal Bearer token after
+        validating the URL path secret. Public exposure is prohibited.
+      operationId: intakeJiraWebhook
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JiraWebhookEnvelope'
+      responses:
+        '200':
+          description: Transition already received (idempotent duplicate)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '202':
+          description: >
+            Event acknowledged. Either accepted for processing, or ignored
+            without penalty (non-status event, out-of-scope project, stale
+            transition, missing changelog id). A 202 is always returned for
+            ignorable traffic so Jira Cloud never auto-disables the webhook.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Wrong Content-Type or malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid internal gateway token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Payload exceeds the 256 KiB ingress limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Structurally valid envelope that cannot be processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Transient upstream failure (Jira API or database). No inbox row is
+            persisted; Jira's webhook redelivery performs the retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     BearerAuth:
@@ -216,3 +285,70 @@ components:
         message:
           type: string
           example: Invalid or missing authorization header
+    JiraWebhookEnvelope:
+      type: object
+      description: Jira Cloud administrative webhook payload (jira:issue_updated)
+      properties:
+        timestamp:
+          type: integer
+          format: int64
+        webhookEvent:
+          type: string
+          example: jira:issue_updated
+        issue:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "10011"
+            key:
+              type: string
+              example: VTX-2
+            self:
+              type: string
+              format: uri
+            fields:
+              type: object
+              properties:
+                project:
+                  type: object
+                  properties:
+                    key:
+                      type: string
+        changelog:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "20001"
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  fieldId:
+                    type: string
+                  to:
+                    type: string
+                    description: Target status ID when field is "status"
+    WebhookResponse:
+      type: object
+      required:
+        - request_id
+        - disposition
+      properties:
+        request_id:
+          type: string
+          description: Correlation ID from the request middleware
+          example: b3f9c2a1d4e5f607
+        disposition:
+          type: string
+          enum: [accepted, duplicate, ignored_stale, ignored_scope, invalid_transition]
+          example: accepted
+        intent_id:
+          type: string
+          format: uuid
+          description: Present for accepted and duplicate dispositions
+          example: 3f6a2c94-0d1b-4e58-9a7c-12df34ab56cd

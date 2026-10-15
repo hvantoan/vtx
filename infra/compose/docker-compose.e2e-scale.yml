@@ -1,0 +1,7 @@
+# JT-03 companion override: unpublish the backend host port so N replicas
+# can coexist — webhooks reach all replicas via the gateway's internal DNS.
+name: vtx
+
+services:
+  backend:
+    ports: !reset []

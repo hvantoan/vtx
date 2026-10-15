@@ -18,6 +18,42 @@ type AgentSession struct {
 	EndedAt   pgtype.Timestamptz `json:"ended_at"`
 }
 
+type ExecutionIntent struct {
+	IntentID       pgtype.UUID        `json:"intent_id"`
+	Source         string             `json:"source"`
+	IssueKey       string             `json:"issue_key"`
+	TargetStatusID string             `json:"target_status_id"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type JiraWebhookInbox struct {
+	EventID        pgtype.UUID        `json:"event_id"`
+	JiraSiteID     string             `json:"jira_site_id"`
+	IssueID        string             `json:"issue_id"`
+	IssueKey       string             `json:"issue_key"`
+	ChangelogID    string             `json:"changelog_id"`
+	TargetStatusID string             `json:"target_status_id"`
+	Outcome        string             `json:"outcome"`
+	PayloadHash    string             `json:"payload_hash"`
+	RequestID      pgtype.Text        `json:"request_id"`
+	CorrelationID  pgtype.Text        `json:"correlation_id"`
+	IntentID       pgtype.UUID        `json:"intent_id"`
+	ErrorDetail    pgtype.Text        `json:"error_detail"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OutboxEvent struct {
+	OutboxID    pgtype.UUID        `json:"outbox_id"`
+	IntentID    pgtype.UUID        `json:"intent_id"`
+	EventType   string             `json:"event_type"`
+	Payload     []byte             `json:"payload"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type Task struct {
 	ID            string             `json:"id"`
 	Title         string             `json:"title"`

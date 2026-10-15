@@ -11,9 +11,19 @@ import (
 type Querier interface {
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateTaskEvent(ctx context.Context, arg CreateTaskEventParams) (TaskEvent, error)
+	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
 	GetTask(ctx context.Context, id string) (Task, error)
+	InsertExecutionIntent(ctx context.Context, arg InsertExecutionIntentParams) (ExecutionIntent, error)
+	// VTX-2: Jira webhook intake queries. All dedup writes run inside the single
+	// pgx.Tx opened by the application service (queries.WithTx).
+	// Returns the inserted row; ON CONFLICT DO NOTHING yields an empty result on
+	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
+	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
+	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (OutboxEvent, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
+	// Links the accepted inbox row to its intent and stamps the terminal outcome.
+	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
 	UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusParams) error
 }
 

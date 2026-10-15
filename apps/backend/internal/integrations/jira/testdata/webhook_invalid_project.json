@@ -1,0 +1,34 @@
+{
+  "timestamp": 1760500002000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "issue": {
+    "id": "10013",
+    "key": "OTHER-1",
+    "self": "https://vtxsolution.atlassian.net/rest/api/3/issue/10013",
+    "fields": {
+      "project": {
+        "id": "10001",
+        "key": "OTHER"
+      },
+      "status": {
+        "id": "10007",
+        "name": "Ready To Develope"
+      }
+    }
+  },
+  "changelog": {
+    "id": "20003",
+    "items": [
+      {
+        "field": "status",
+        "fieldtype": "jira",
+        "fieldId": "status",
+        "from": "10000",
+        "fromString": "To Do",
+        "to": "10007",
+        "toString": "Ready To Develope"
+      }
+    ]
+  }
+}

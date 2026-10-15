@@ -17,6 +17,7 @@ Thumbs.db
 .env.*.local
 *.pem
 *.key
+infra/compose/nginx/certs/
 
 # Go artifacts
 # STRICT CONSTRAINT: NEVER allow go.work or go.work.sum in repository
