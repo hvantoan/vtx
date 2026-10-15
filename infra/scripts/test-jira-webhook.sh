@@ -20,7 +20,19 @@ COMPOSE=(docker compose --env-file "$ENV_FILE"
   -f infra/compose/docker-compose.e2e.yml)
 SCALE_FILE=infra/compose/docker-compose.e2e-scale.yml
 
-GATEWAY="https://localhost:${VTX_GATEWAY_PORT:-49443}"
+# Host-ported service URLs. When VTX_*_PORT=0 (CI binds ephemerally), the
+# actual binding is resolved via `docker compose port`; it MUST be re-resolved
+# after every `up` that can recreate the container (build, env change),
+# because a recreated ephemeral binding gets a NEW port.
+API_PORT=""
+GATEWAY=""
+resolve_ports() {
+  local p
+  p=$("${COMPOSE[@]}" --profile e2e port backend 49080 | head -1 | awk -F: '{print $NF}' | tr -d '[:space:]')
+  API_PORT="${JT_API_PORT:-${p:-${VTX_API_PORT:-49080}}}"
+  p=$("${COMPOSE[@]}" --profile e2e port gateway 443 | head -1 | awk -F: '{print $NF}' | tr -d '[:space:]')
+  GATEWAY="https://localhost:${JT_GATEWAY_PORT:-${p:-${VTX_GATEWAY_PORT:-49443}}}"
+}
 SECRET="${WEBHOOK_PATH_SECRET_PRIMARY:?missing in .env}"
 SECONDARY="secondaryrot9e2b4a1c8d7f3e6b5a9c0d2e4f6a8b1c3d5e7f9a0b"
 GWT="${GATEWAY_INTERNAL_AUTH_TOKEN:?missing in .env}"
@@ -90,8 +102,9 @@ echo "==================================================================="
 # --- Stack up: postgres, backend (rebuilt), gateway, jira-stub ---------------
 echo "[setup] building + starting single-replica e2e stack"
 "${COMPOSE[@]}" --profile e2e up -d --build backend gateway jira-stub postgres >/dev/null 2>&1
+resolve_ports
 wait_http "$GATEWAY/" 60 || { echo "FATAL: gateway unreachable"; exit 2; }
-wait_http "http://localhost:${VTX_API_PORT:-49080}/health" 60 || { echo "FATAL: backend unreachable"; exit 2; }
+wait_http "http://localhost:${API_PORT}/health" 60 || { echo "FATAL: backend unreachable"; exit 2; }
 sleep 3
 cleanup
 
@@ -102,12 +115,12 @@ expect_status "JT-02" "wrong path secret -> 403 from nginx" "403" "$S"
 echo "--- Layer 2: internal bearer token (JT-04, JT-05) ------------------"
 # Reach backend directly (published port 49080) to test layer 2 isolation.
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
-    "http://localhost:${VTX_API_PORT:-49080}/api/v1/integrations/jira/webhooks" \
+    "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: application/json' -d '{}')
 expect_status "JT-04" "no Authorization header -> 401" "401" "$S"
 
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
-    "http://localhost:${VTX_API_PORT:-49080}/api/v1/integrations/jira/webhooks" \
+    "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${API_AUTH_TOKEN:-vtx-dev-secret-token-change-in-production}" -d '{}')
 expect_status "JT-05" "public API_AUTH_TOKEN rejected on webhook route -> 401" "401" "$S"
@@ -115,7 +128,7 @@ expect_status "JT-05" "public API_AUTH_TOKEN rejected on webhook route -> 401" "
 echo "--- Ingress controls (JT-06, JT-07) -------------------------------"
 # Forge a gateway-style request: correct path secret + injected bearer.
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
-    "http://localhost:${VTX_API_PORT:-49080}/api/v1/integrations/jira/webhooks" \
+    "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: text/plain' \
     -H "Authorization: Bearer $GWT" -d '{}')
 expect_status "JT-06" "text/plain Content-Type -> 400" "400" "$S"
@@ -124,14 +137,14 @@ python3 - <<'PY' > /tmp/jt_big.json
 print('{"a":"' + 'x' * (280 * 1024) + '"}')
 PY
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
-    "http://localhost:${VTX_API_PORT:-49080}/api/v1/integrations/jira/webhooks" \
+    "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $GWT" --data-binary @/tmp/jt_big.json)
 expect_status "JT-07" "payload >256 KiB -> 413" "413" "$S"
 
 echo "--- Ignorable traffic: 202, never penalized (JT-08, JT-15) ---------"
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
-    "http://localhost:${VTX_API_PORT:-49080}/api/v1/integrations/jira/webhooks" \
+    "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $GWT" \
     -d '{"webhookEvent":"jira:issue_updated","issue":{"id":"190001","key":"VTX-91","self":"x",
@@ -145,7 +158,7 @@ else
 fi
 
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
-    "http://localhost:${VTX_API_PORT:-49080}/api/v1/integrations/jira/webhooks" \
+    "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $GWT" \
     -d '{"webhookEvent":"jira:issue_updated","issue":{"id":"190002","key":"VTX-92","self":"x",
@@ -322,6 +335,7 @@ if [ "$S" != "403" ]; then bad "JT-18" "inactive secondary secret -> want 403, g
 # Deploy gateway accepting BOTH (overlap), then retire primary.
 export WEBHOOK_PATH_SECRET_SECONDARY="$SECONDARY"
 "${COMPOSE[@]}" --profile e2e up -d gateway >/dev/null 2>&1
+resolve_ports
 sleep 3
 S2=$(send_issue 190005 VTX-118 cl-rot-2 10007 "$SECONDARY")
 S3=$(send_issue 190006 VTX-118b cl-rot-3 10007 "$SECRET")

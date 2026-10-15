@@ -183,31 +183,45 @@ jobs:
           GATEWAY_INTERNAL_AUTH_TOKEN=ci-internal-gateway-token-0000000000000000
           WEBHOOK_PATH_SECRET_PRIMARY=cisecretprimary00000000000000000000000000000000000
           WEBHOOK_PATH_SECRET_SECONDARY=
-          VTX_GATEWAY_PORT=49443
-          VTX_API_PORT=49080
-          VTX_POSTGRES_PORT=49432
-          VTX_TEMPORAL_PORT=49233
-          VTX_TEMPORAL_UI_PORT=49234
-          VTX_WEB_PORT=49030
+          # Host ports are bound ephemerally (0): fixed ports in the
+          # 32768-60999 range collide with runner-side outbound connections
+          # (ip_local_port_range), which caused a "port already allocated"
+          # failure on postgres. Actual ports are resolved via
+          # `docker compose port` after the stack is up (see below).
+          VTX_GATEWAY_PORT=0
+          VTX_API_PORT=0
+          VTX_POSTGRES_PORT=0
+          VTX_TEMPORAL_PORT=0
+          VTX_TEMPORAL_UI_PORT=0
+          VTX_WEB_PORT=0
           EOF
           export JT_ENV_FILE=$PWD/ci.env
           echo "JT_ENV_FILE=$PWD/ci.env" >> "$GITHUB_ENV"
 
       - name: Start e2e stack (postgres + backend + gateway + jira-stub)
         run: |
-          docker compose --env-file ci.env \
-            -f infra/compose/docker-compose.yml \
-            -f infra/compose/docker-compose.e2e.yml \
-            --profile e2e up -d --build backend gateway jira-stub postgres
+          COMPOSE=(docker compose --env-file ci.env
+            -f infra/compose/docker-compose.yml
+            -f infra/compose/docker-compose.e2e.yml --profile e2e)
+          "${COMPOSE[@]}" up -d --build backend gateway jira-stub postgres
           # Wait for postgres health before migrating.
           for i in $(seq 60); do
             docker exec vtx-postgres pg_isready -U vtx_user -d vtx_platform >/dev/null 2>&1 && break
             sleep 1
           done
+          # Resolve the ephemeral postgres host port (VTX_POSTGRES_PORT=0 in
+          # ci.env) for the migration DSN. ci.env stays at 0 so later compose
+          # calls keep the same spec; the JT harness re-resolves api/gateway
+          # ports itself after every `up` (ephemeral bindings change on
+          # container recreate).
+          JT_PG_PORT=$("${COMPOSE[@]}" port postgres 5432 | head -1 | awk -F: '{print $NF}' | tr -d '[:space:]')
+          [ -n "$JT_PG_PORT" ] || { echo "FATAL: could not resolve postgres port"; exit 1; }
+          echo "JT_PG_PORT=$JT_PG_PORT" >> "$GITHUB_ENV"
+          echo "postgres bound to host port $JT_PG_PORT"
 
       - name: Migrations up / down-to-0 / re-up on clean DB
         run: |
-          DSN="postgres://vtx_user:vtx_password@localhost:49432/vtx_platform?sslmode=disable"
+          DSN="postgres://vtx_user:vtx_password@localhost:${JT_PG_PORT}/vtx_platform?sslmode=disable"
           goose -dir apps/backend/db/migrations postgres "$DSN" up
           goose -dir apps/backend/db/migrations postgres "$DSN" down-to 0
           goose -dir apps/backend/db/migrations postgres "$DSN" up
