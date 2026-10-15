@@ -29,6 +29,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Jira intake config audit: log the resolved policy (project keys and
+	// status IDs are not secrets) — never file contents or credentials.
+	{
+		attrs := []any{
+			slog.String("source", cfg.JiraConfigSource()),
+			slog.Any("projects", cfg.JiraProjectKeys()),
+		}
+		var ids []string
+		for _, k := range cfg.JiraProjectKeys() {
+			if list, ok := cfg.StartStatusIDsFor(k); ok {
+				ids = append(ids, list...)
+			}
+		}
+		attrs = append(attrs, slog.Any("status_ids", ids))
+		logger.Info("jira intake config", attrs...)
+	}
+
 	logger.Info("Starting VTX Platform API",
 		slog.String("port", cfg.Port),
 		slog.String("env", cfg.Env),
@@ -63,6 +80,7 @@ func main() {
 	// correctly without a live DB pool — fail closed at startup rather than
 	// claim dedup keys it cannot persist.
 	var webhookSvc *application.JiraWebhookService
+	var receiptRec *application.ReceiptRecorder
 	if db == nil {
 		logger.Warn("Jira webhook intake disabled until database connects")
 	} else {
@@ -72,12 +90,38 @@ func main() {
 			os.Exit(1)
 		}
 		webhookSvc = application.NewJiraWebhookService(cfg, db.Pool, db.Queries, jiraClient, logger)
+		receiptRec = application.NewReceiptRecorder(db.Queries)
+
+		// Receipt retention: terminal noise rows age out; accepted/duplicate
+		// receipts are kept as the audit record (review P2-1).
+		go func() {
+			ticker := time.NewTicker(6 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					delCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					n, err := receiptRec.DeleteExpiredReceipts(delCtx, application.ReceiptRetentionDays)
+					cancel()
+					if err != nil {
+						logger.Error("webhook receipt retention failed", "error", err)
+					} else if n > 0 {
+						logger.Info("webhook receipts pruned", "deleted", n)
+					}
+				}
+			}
+		}()
 	}
 
 	// Create HTTP Server
 	server := transporthttp.NewServer(cfg, logger, dbDep, temporalDep)
 	if webhookSvc != nil {
 		server.WithJiraWebhook(webhookSvc)
+	}
+	if receiptRec != nil {
+		server.WithJiraReceipts(receiptRec)
 	}
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 

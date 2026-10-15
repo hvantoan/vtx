@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,12 +36,37 @@ type stubProcessor struct {
 	env *domain.JiraWebhookEnvelope
 }
 
-func (s *stubProcessor) ProcessWebhookTransition(ctx context.Context, env *domain.JiraWebhookEnvelope, raw []byte, requestID string) (application.Result, error) {
+func (s *stubProcessor) ProcessWebhookTransition(ctx context.Context, env *domain.JiraWebhookEnvelope, raw []byte, requestID string, receivedAt time.Time) (application.Result, error) {
 	s.env = env
 	return s.res, s.err
 }
 
-func setupWebhookServer(t *testing.T, p transporthttp.JiraWebhookProcessor) (http.Handler, *config.Config) {
+// stubReceiptRecorder captures receipts without a database.
+type stubReceiptRecorder struct {
+	mu   sync.Mutex
+	recs []application.Receipt
+}
+
+func (s *stubReceiptRecorder) Record(ctx context.Context, rec application.Receipt) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recs = append(s.recs, rec)
+	return nil
+}
+
+func (s *stubReceiptRecorder) last() application.Receipt {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recs[len(s.recs)-1]
+}
+
+func (s *stubReceiptRecorder) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.recs)
+}
+
+func setupWebhookServer(t *testing.T, p transporthttp.JiraWebhookProcessor, recs ...transporthttp.ReceiptRecorder) (http.Handler, *config.Config) {
 	t.Helper()
 	cfg := &config.Config{
 		Port:                     "49080",
@@ -50,6 +77,9 @@ func setupWebhookServer(t *testing.T, p transporthttp.JiraWebhookProcessor) (htt
 	srv := transporthttp.NewServer(cfg, observability.SetupLogger("error"), nil, nil)
 	if p != nil {
 		srv.WithJiraWebhook(p)
+	}
+	for _, rec := range recs {
+		srv.WithJiraReceipts(rec)
 	}
 	return srv.Routes(), cfg
 }
@@ -187,4 +217,72 @@ func TestWebhookNoSecretsInResponse(t *testing.T) {
 	handler.ServeHTTP(rr, webhookReq(t, webhookPath, testGatewayToken, "application/json", validBody(t)))
 	assert.False(t, strings.Contains(rr.Body.String(), testGatewayToken))
 	assert.False(t, strings.Contains(rr.Body.String(), "/webhooks/"))
+}
+
+// TestWebhookReceipts proves review P2-1: every authenticated request leaves
+// exactly one receipt; unauthenticated requests leave none.
+func TestWebhookReceipts(t *testing.T) {
+	body := validBody(t)
+
+	t.Run("malformed JSON -> rejected receipt", func(t *testing.T) {
+		recs := &stubReceiptRecorder{}
+		handler, _ := setupWebhookServer(t, &stubProcessor{}, recs)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, webhookReq(t, webhookPath, testGatewayToken, "application/json", []byte("{bad")))
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		require.Equal(t, 1, recs.count())
+		rec := recs.last()
+		assert.Equal(t, application.DispositionRejected, rec.Outcome)
+		assert.Equal(t, application.ReasonMalformedJSON, rec.ReasonCode)
+		assert.NotEmpty(t, rec.PayloadHash)
+		assert.False(t, rec.ReceivedAt.IsZero())
+	})
+
+	t.Run("wrong content type -> rejected receipt", func(t *testing.T) {
+		recs := &stubReceiptRecorder{}
+		handler, _ := setupWebhookServer(t, &stubProcessor{}, recs)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, webhookReq(t, webhookPath, testGatewayToken, "text/plain", body))
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		assert.Equal(t, application.ReasonBadContentType, recs.last().ReasonCode)
+	})
+
+	t.Run("oversized -> rejected receipt with truncated hash", func(t *testing.T) {
+		recs := &stubReceiptRecorder{}
+		handler, _ := setupWebhookServer(t, &stubProcessor{}, recs)
+		big := bytes.Repeat([]byte("x"), 300*1024)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, webhookReq(t, webhookPath, testGatewayToken, "application/json", big))
+		assert.Equal(t, http.StatusRequestEntityTooLarge, rr.Code)
+		assert.Equal(t, application.ReasonPayloadTooLarge, recs.last().ReasonCode)
+	})
+
+	t.Run("accepted service result -> accepted receipt with issue_key", func(t *testing.T) {
+		recs := &stubReceiptRecorder{}
+		handler, _ := setupWebhookServer(t, &stubProcessor{res: application.Result{Disposition: application.DispositionAccepted, IntentID: "x"}}, recs)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, webhookReq(t, webhookPath, testGatewayToken, "application/json", body))
+		assert.Equal(t, http.StatusAccepted, rr.Code)
+		rec := recs.last()
+		assert.Equal(t, application.DispositionAccepted, rec.Outcome)
+		assert.Equal(t, "VTX-2", rec.IssueKey)
+	})
+
+	t.Run("retryable error -> failed_retryable receipt", func(t *testing.T) {
+		recs := &stubReceiptRecorder{}
+		handler, _ := setupWebhookServer(t, &stubProcessor{err: fmt.Errorf("%w: jira api status 429", jira.ErrRetryable)}, recs)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, webhookReq(t, webhookPath, testGatewayToken, "application/json", body))
+		assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+		assert.Equal(t, application.DispositionFailedRetryable, recs.last().Outcome)
+	})
+
+	t.Run("unauthenticated request writes nothing", func(t *testing.T) {
+		recs := &stubReceiptRecorder{}
+		handler, _ := setupWebhookServer(t, &stubProcessor{}, recs)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, webhookReq(t, webhookPath, "", "application/json", body))
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+		assert.Equal(t, 0, recs.count(), "401 must never produce a receipt")
+	})
 }

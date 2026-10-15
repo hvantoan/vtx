@@ -15,6 +15,9 @@ jobs:
   filter:
     name: Detect Changed Paths
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       backend: ${{ steps.changes.outputs.backend }}
       web: ${{ steps.changes.outputs.web }}
@@ -147,12 +150,122 @@ jobs:
             console.log('JSON schemas are valid syntax.');
           "
 
+  backend-integration:
+    name: Backend Integration (Migrations + JT-01..21 E2E)
+    needs: [filter, boundary-check]
+    if: needs.filter.outputs.backend == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'apps/backend/go.mod'
+          cache-dependency-path: 'apps/backend/go.sum'
+
+      - name: Install goose + sqlc (pinned)
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+
+      - name: Prepare e2e env + gateway certs
+        run: |
+          infra/compose/nginx/gen_certs.sh
+          cat > ci.env <<EOF
+          PORT=49080
+          API_AUTH_TOKEN=ci-public-token
+          JIRA_BASE_URL=https://vtxsolution.atlassian.net
+          JIRA_API_EMAIL=ci@example.com
+          JIRA_API_TOKEN=ci-token
+          JIRA_SITE_ID=vtxsolution.atlassian.net
+          GATEWAY_INTERNAL_AUTH_TOKEN=ci-internal-gateway-token-0000000000000000
+          WEBHOOK_PATH_SECRET_PRIMARY=cisecretprimary00000000000000000000000000000000000
+          WEBHOOK_PATH_SECRET_SECONDARY=
+          # Host ports are bound ephemerally (0): fixed ports in the
+          # 32768-60999 range collide with runner-side outbound connections
+          # (ip_local_port_range), which caused a "port already allocated"
+          # failure on postgres. Actual ports are resolved via
+          # `docker compose port` after the stack is up (see below).
+          VTX_GATEWAY_PORT=0
+          VTX_API_PORT=0
+          VTX_POSTGRES_PORT=0
+          VTX_TEMPORAL_PORT=0
+          VTX_TEMPORAL_UI_PORT=0
+          VTX_WEB_PORT=0
+          EOF
+          export JT_ENV_FILE=$PWD/ci.env
+          echo "JT_ENV_FILE=$PWD/ci.env" >> "$GITHUB_ENV"
+
+      - name: Start e2e stack (postgres + backend + gateway + jira-stub)
+        run: |
+          COMPOSE=(docker compose --env-file ci.env
+            -f infra/compose/docker-compose.yml
+            -f infra/compose/docker-compose.e2e.yml --profile e2e)
+          "${COMPOSE[@]}" up -d --build backend gateway jira-stub postgres
+          # Wait for postgres health before migrating.
+          for i in $(seq 60); do
+            docker exec vtx-postgres pg_isready -U vtx_user -d vtx_platform >/dev/null 2>&1 && break
+            sleep 1
+          done
+          # Resolve the ephemeral postgres host port (VTX_POSTGRES_PORT=0 in
+          # ci.env) for the migration DSN. ci.env stays at 0 so later compose
+          # calls keep the same spec; the JT harness re-resolves api/gateway
+          # ports itself after every `up` (ephemeral bindings change on
+          # container recreate).
+          JT_PG_PORT=$("${COMPOSE[@]}" port postgres 5432 | head -1 | awk -F: '{print $NF}' | tr -d '[:space:]')
+          [ -n "$JT_PG_PORT" ] || { echo "FATAL: could not resolve postgres port"; exit 1; }
+          echo "JT_PG_PORT=$JT_PG_PORT" >> "$GITHUB_ENV"
+          echo "postgres bound to host port $JT_PG_PORT"
+
+      - name: Migrations up / down-to-0 / re-up on clean DB
+        run: |
+          DSN="postgres://vtx_user:vtx_password@localhost:${JT_PG_PORT}/vtx_platform?sslmode=disable"
+          goose -dir apps/backend/db/migrations postgres "$DSN" up
+          goose -dir apps/backend/db/migrations postgres "$DSN" down-to 0
+          goose -dir apps/backend/db/migrations postgres "$DSN" up
+
+      - name: sqlc generate drift check
+        run: |
+          cd apps/backend && sqlc generate
+          git diff --exit-code internal/persistence/db
+
+      - name: JT-01..21 harness (20 concurrent × 2 replicas, real nginx)
+        run: ./infra/scripts/test-jira-webhook.sh | tee jt-evidence.log
+
+      - name: Render prod overlay — backend must have no ports (JT-16 evidence)
+        run: |
+          docker compose --env-file ci.env \
+            -f infra/compose/docker-compose.yml \
+            -f infra/compose/docker-compose.prod.yml config > prod-compose-render.yml
+          # Direct assertion: backend service block has no ports key.
+          python3 - <<'PY'
+          import re, sys
+          txt = open('prod-compose-render.yml').read()
+          m = re.search(r'^  backend:.*?(?=^  \w)', txt, re.S | re.M)
+          assert m, "backend service missing"
+          assert 'ports:' not in m.group(0), "backend must not publish ports in prod"
+          print("prod overlay verified: backend has no ports")
+          PY
+
+      - name: Upload JT evidence (SHA-stamped)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jt-evidence-${{ github.sha }}
+          path: |
+            jt-evidence.log
+            prod-compose-render.yml
+          if-no-files-found: warn
+
   gate:
     name: Required Status Checks Gate
     needs:
       - filter
       - boundary-check
       - backend-ci
+      - backend-integration
       - web-ci
       - agent-ci
       - contract-conformance
@@ -164,6 +277,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BOUNDARY_RES: ${{ needs.boundary-check.result }}
           BACKEND_RES: ${{ needs.backend-ci.result }}
+          INTEG_RES: ${{ needs.backend-integration.result }}
           BACKEND_TRIGGER: ${{ needs.filter.outputs.backend }}
           WEB_RES: ${{ needs.web-ci.result }}
           WEB_TRIGGER: ${{ needs.filter.outputs.web }}
@@ -176,6 +290,7 @@ jobs:
           echo "Event: $EVENT_NAME"
           echo "Boundary Check Result: $BOUNDARY_RES"
           echo "Backend Result: $BACKEND_RES (Triggered: $BACKEND_TRIGGER)"
+          echo "Integration Result: $INTEG_RES (Triggered: $BACKEND_TRIGGER)"
           echo "Web Result: $WEB_RES (Triggered: $WEB_TRIGGER)"
           echo "Agent Result: $AGENT_RES (Triggered: $AGENT_TRIGGER)"
           echo "Contract Result: $CONTRACT_RES (Triggered: $CONTRACT_TRIGGER)"
@@ -213,6 +328,7 @@ jobs:
           fi
 
           check_job "backend-ci" "$BACKEND_RES" "$BACKEND_TRIGGER"
+          check_job "backend-integration" "$INTEG_RES" "$BACKEND_TRIGGER"
           check_job "web-ci" "$WEB_RES" "$WEB_TRIGGER"
           check_job "agent-ci" "$AGENT_RES" "$AGENT_TRIGGER"
           check_job "contract-conformance" "$CONTRACT_RES" "$CONTRACT_TRIGGER"

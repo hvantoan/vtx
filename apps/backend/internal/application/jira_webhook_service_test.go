@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,21 +22,28 @@ import (
 	"github.com/vtx/platform/internal/persistence/db"
 )
 
-type stubStatusChecker struct {
-	statusID string
-	err      error
-	calls    int32
-	mu       sync.Mutex
+type stubIssueFetcher struct {
+	issue jira.FetchedIssue
+	err   error
+	calls int32
+	mu    sync.Mutex
 }
 
-func (s *stubStatusChecker) FetchIssueStatus(ctx context.Context, issueID string) (string, error) {
+func (s *stubIssueFetcher) FetchIssue(ctx context.Context, issueID string) (jira.FetchedIssue, error) {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
-	return s.statusID, s.err
+	if s.err != nil {
+		return jira.FetchedIssue{}, s.err
+	}
+	issue := s.issue
+	if issue.ID == "" {
+		issue.ID = issueID // default: echo the request like the real client
+	}
+	return issue, nil
 }
 
-func (s *stubStatusChecker) callCount() int {
+func (s *stubIssueFetcher) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return int(s.calls)
@@ -52,11 +60,14 @@ func loadFixture(t *testing.T, name string) (*domain.JiraWebhookEnvelope, []byte
 
 func testConfig() *config.Config {
 	return &config.Config{
-		JiraSiteID:             "vtxsolution.atlassian.net",
-		JiraProjectAllowlist:   []string{"VTX"},
-		JiraReadyToDevStatusID: "10007",
+		JiraSiteID: "vtxsolution.atlassian.net",
+		JiraProjects: map[string]config.JiraProjectConfig{
+			"VTX": {StartStatusIDs: []string{"10007"}},
+		},
 	}
 }
+
+var testReceivedAt = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -101,19 +112,19 @@ func TestStatusTransitionToScansAllItems(t *testing.T) {
 }
 
 func TestEnvelopeGatesReturnIgnoredWithoutDB(t *testing.T) {
-	checker := &stubStatusChecker{}
-	svc := application.NewJiraWebhookService(testConfig(), nil, nil, checker, slog.Default())
+	fetcher := &stubIssueFetcher{}
+	svc := application.NewJiraWebhookService(testConfig(), nil, nil, fetcher, slog.Default())
 
 	t.Run("non-status item is ignored scope, not a dedup candidate", func(t *testing.T) {
 		env, raw := loadFixture(t, "webhook_no_status_item.json")
-		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-1")
+		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-1", testReceivedAt)
 		require.NoError(t, err)
 		assert.Equal(t, application.DispositionIgnoredScope, res.Disposition)
 	})
 
 	t.Run("missing changelog is ignored", func(t *testing.T) {
 		env, raw := loadFixture(t, "webhook_missing_changelog.json")
-		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-2")
+		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-2", testReceivedAt)
 		require.NoError(t, err)
 		assert.Equal(t, application.DispositionIgnoredScope, res.Disposition)
 	})
@@ -121,12 +132,131 @@ func TestEnvelopeGatesReturnIgnoredWithoutDB(t *testing.T) {
 	t.Run("other event types are ignored", func(t *testing.T) {
 		env, raw := loadFixture(t, "webhook_valid_transition.json")
 		env.WebhookEvent = "jira:issue_created"
-		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-3")
+		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-3", testReceivedAt)
 		require.NoError(t, err)
 		assert.Equal(t, application.DispositionIgnoredScope, res.Disposition)
 	})
 
-	assert.Equal(t, 0, checker.callCount(), "ignored envelopes must never hit the Jira API")
+	t.Run("transition to non-start status is invalid_transition — no DB, no Jira call", func(t *testing.T) {
+		env, raw := loadFixture(t, "webhook_valid_transition.json")
+		env.Changelog.Items[1].To = "10005"
+		res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-4", testReceivedAt)
+		require.NoError(t, err)
+		assert.Equal(t, application.DispositionInvalidTransition, res.Disposition)
+	})
+
+	assert.Equal(t, 0, fetcher.callCount(), "ignored envelopes must never hit the Jira API")
+}
+
+// TestWrongTargetLeavesNoInboxRow proves the P1-1 fix: a forged transition to
+// a non-start status never claims a dedup key — receipt-only disposition.
+func TestWrongTargetLeavesNoInboxRow(t *testing.T) {
+	pool := testPool(t)
+	cleanupKeys(t, pool)
+	defer cleanupKeys(t, pool)
+
+	fetcher := &stubIssueFetcher{}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
+	env, raw := loadFixture(t, "webhook_valid_transition.json")
+	env.Changelog.Items[1].To = "10005" // valid transition, but not a start status
+
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-wt", testReceivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, application.DispositionInvalidTransition, res.Disposition)
+
+	var rows, intents int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM jira_webhook_inbox WHERE changelog_id='20001'`).Scan(&rows))
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-2'`).Scan(&intents))
+	assert.Equal(t, 0, rows, "invalid_transition must never write an inbox row")
+	assert.Equal(t, 0, intents)
+	assert.Equal(t, 0, fetcher.callCount(), "wrong-target never reaches the Jira API")
+}
+
+// TestIdentityMismatchRejected proves the P1-2 fix: the webhook claims project
+// VTX but Jira's authoritative view says OTHER — ignored_scope, no intent.
+func TestIdentityMismatchRejected(t *testing.T) {
+	pool := testPool(t)
+	cleanupKeys(t, pool)
+	defer cleanupKeys(t, pool)
+
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "OTHER", StatusID: "10007"}}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
+	env, raw := loadFixture(t, "webhook_valid_transition.json")
+
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-im", testReceivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, application.DispositionIgnoredScope, res.Disposition)
+	assert.Equal(t, application.ReasonIdentityMismatch, res.ReasonCode)
+
+	var outcome string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='20001'`).Scan(&outcome))
+	assert.Equal(t, "ignored_scope", outcome)
+
+	var intents int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-2'`).Scan(&intents))
+	assert.Equal(t, 0, intents)
+}
+
+// TestForgedIssueKeyRejected proves the review P1 fix: the payload claims
+// issue.key VTX-999 on a real issue.id, but Jira's authoritative key is
+// VTX-2 — identity mismatch, no intent under the forged key.
+func TestForgedIssueKeyRejected(t *testing.T) {
+	pool := testPool(t)
+	cleanupKeys(t, pool)
+	defer cleanupKeys(t, pool)
+
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10007"}}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
+	env, raw := loadFixture(t, "webhook_valid_transition.json")
+	env.Issue.Key = "VTX-999" // forged display key on a valid issue.id
+
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-fk", testReceivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, application.DispositionIgnoredScope, res.Disposition)
+	assert.Equal(t, application.ReasonIdentityMismatch, res.ReasonCode)
+
+	var outcome string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='20001'`).Scan(&outcome))
+	assert.Equal(t, "ignored_scope", outcome)
+
+	var forged, intents int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-999'`).Scan(&forged))
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-2'`).Scan(&intents))
+	assert.Equal(t, 0, forged, "no intent under the forged key")
+	assert.Equal(t, 0, intents)
+}
+
+// TestStatusDriftBetweenStartStatuses proves the review P1 fix: with two
+// configured start statuses, a webhook claiming entry into 10007 is stale
+// when Jira says the issue already sits in 10008 — even though 10008 is also
+// an allowed start status. The claimed target must equal the current status.
+func TestStatusDriftBetweenStartStatuses(t *testing.T) {
+	pool := testPool(t)
+	cleanupKeys(t, pool)
+	defer cleanupKeys(t, pool)
+
+	cfg := &config.Config{
+		JiraSiteID: "vtxsolution.atlassian.net",
+		JiraProjects: map[string]config.JiraProjectConfig{
+			"VTX": {StartStatusIDs: []string{"10007", "10008"}},
+		},
+	}
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10008"}}
+	svc := application.NewJiraWebhookService(cfg, pool, db.New(pool), fetcher, slog.Default())
+	env, raw := loadFixture(t, "webhook_valid_transition.json")
+
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-sd", testReceivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, application.DispositionIgnoredStale, res.Disposition)
+	assert.Equal(t, application.ReasonStatusDrift, res.ReasonCode)
+
+	var outcome string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='20001'`).Scan(&outcome))
+	assert.Equal(t, "ignored_stale", outcome)
+
+	var intents int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT count(*) FROM execution_intents WHERE issue_key='VTX-2'`).Scan(&intents))
+	assert.Equal(t, 0, intents)
 }
 
 func TestAcceptedThenDuplicate(t *testing.T) {
@@ -134,17 +264,17 @@ func TestAcceptedThenDuplicate(t *testing.T) {
 	cleanupKeys(t, pool)
 	defer cleanupKeys(t, pool)
 
-	checker := &stubStatusChecker{statusID: "10007"}
-	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), checker, slog.Default())
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10007"}}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
-	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-a")
+	res, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-a", testReceivedAt)
 	require.NoError(t, err)
 	assert.Equal(t, application.DispositionAccepted, res.Disposition)
 	require.NotEmpty(t, res.IntentID)
 
 	// Second delivery of the same transition key -> duplicate, same intent.
-	res2, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-b")
+	res2, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-b", testReceivedAt)
 	require.NoError(t, err)
 	assert.Equal(t, application.DispositionDuplicate, res2.Disposition)
 	assert.Equal(t, res.IntentID, res2.IntentID)
@@ -163,8 +293,8 @@ func TestConcurrentDuplicateDelivery(t *testing.T) {
 	cleanupKeys(t, pool)
 	defer cleanupKeys(t, pool)
 
-	checker := &stubStatusChecker{statusID: "10007"}
-	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), checker, slog.Default())
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10007"}}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
 
 	const n = 8
@@ -175,7 +305,7 @@ func TestConcurrentDuplicateDelivery(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results[i], errs[i] = svc.ProcessWebhookTransition(context.Background(), env, raw, fmt.Sprintf("req-c%d", i))
+			results[i], errs[i] = svc.ProcessWebhookTransition(context.Background(), env, raw, fmt.Sprintf("req-c%d", i), testReceivedAt)
 		}(i)
 	}
 	wg.Wait()
@@ -208,11 +338,11 @@ func TestRetryableFailureLeavesNoInboxRow(t *testing.T) {
 	cleanupKeys(t, pool)
 	defer cleanupKeys(t, pool)
 
-	checker := &stubStatusChecker{err: fmt.Errorf("%w: jira api status 429", jira.ErrRetryable)}
-	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), checker, slog.Default())
+	fetcher := &stubIssueFetcher{err: fmt.Errorf("%w: jira api status 429", jira.ErrRetryable)}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
 
-	_, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-r")
+	_, err := svc.ProcessWebhookTransition(context.Background(), env, raw, "req-r", testReceivedAt)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, jira.ErrRetryable))
 
@@ -229,10 +359,10 @@ func TestStaleAndScopePathsWriteTerminalRows(t *testing.T) {
 	ctx := context.Background()
 
 	// Stale: Jira says the issue already left Ready to Dev.
-	checker := &stubStatusChecker{statusID: "10005"}
-	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), checker, slog.Default())
+	fetcher := &stubIssueFetcher{issue: jira.FetchedIssue{Key: "VTX-2", ProjectKey: "VTX", StatusID: "10005"}}
+	svc := application.NewJiraWebhookService(testConfig(), pool, db.New(pool), fetcher, slog.Default())
 	env, raw := loadFixture(t, "webhook_valid_transition.json")
-	res, err := svc.ProcessWebhookTransition(ctx, env, raw, "req-s")
+	res, err := svc.ProcessWebhookTransition(ctx, env, raw, "req-s", testReceivedAt)
 	require.NoError(t, err)
 	assert.Equal(t, application.DispositionIgnoredStale, res.Disposition)
 
@@ -242,10 +372,47 @@ func TestStaleAndScopePathsWriteTerminalRows(t *testing.T) {
 
 	// Out-of-scope project: inbox-only row, no Jira call needed.
 	env2, raw2 := loadFixture(t, "webhook_invalid_project.json")
-	res2, err := svc.ProcessWebhookTransition(ctx, env2, raw2, "req-o")
+	res2, err := svc.ProcessWebhookTransition(ctx, env2, raw2, "req-o", testReceivedAt)
 	require.NoError(t, err)
 	assert.Equal(t, application.DispositionIgnoredScope, res2.Disposition)
 
 	require.NoError(t, pool.QueryRow(ctx, `SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='20003'`).Scan(&outcome))
 	assert.Equal(t, "ignored_scope", outcome)
+}
+
+// TestReceiptRetention proves the retention query only removes aged terminal
+// noise — accepted/duplicate receipts are the audit record and stay.
+func TestReceiptRetention(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	queries := db.New(pool)
+	rec := application.NewReceiptRecorder(queries)
+
+	_, err := pool.Exec(ctx, "DELETE FROM webhook_receipts")
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM webhook_receipts") })
+
+	old := time.Now().UTC().Add(-8 * 24 * time.Hour)
+	fresh := time.Now().UTC()
+
+	must := func(outcome string, at time.Time) {
+		err := rec.Record(ctx, application.Receipt{
+			ReceivedAt: at, Outcome: outcome, RequestID: "t", PayloadHash: strings.Repeat("a", 64),
+		})
+		require.NoError(t, err)
+	}
+	must(application.DispositionRejected, old)          // aged noise -> deleted
+	must(application.DispositionInvalidTransition, old) // aged noise -> deleted
+	must(application.DispositionIgnoredScope, old)      // aged noise -> deleted
+	must(application.DispositionAccepted, old)          // aged but terminal-accepted -> kept
+	must(application.DispositionRejected, fresh)        // fresh noise -> kept
+	must(application.DispositionFailedRetryable, old)   // transient signal -> kept
+
+	deleted, err := rec.DeleteExpiredReceipts(ctx, application.ReceiptRetentionDays)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), deleted)
+
+	var remaining int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM webhook_receipts").Scan(&remaining))
+	assert.Equal(t, 3, remaining)
 }

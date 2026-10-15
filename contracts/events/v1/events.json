@@ -17,13 +17,43 @@
             "task.started",
             "task.progress",
             "task.completed",
-            "task.failed",
-            "worker.status_changed"
+            "worker.status_changed",
+            "execution_intent.created.v1"
           ]
         },
         "timestamp": { "type": "string", "format": "date-time" },
         "source": { "type": "string" },
         "data": { "type": "object" }
+      }
+    },
+    "ExecutionIntentCreatedV1": {
+      "type": "object",
+      "description": "Payload persisted to outbox_events.payload for event_type execution_intent.created.v1 (VTX-2 → VTX-3). changelog_id is the Jira changelog.id — NOT a Jira workflow transition ID. occurred_at is the Jira webhook envelope timestamp normalized to UTC; occurred_at_source records whether it came from the webhook timestamp or fell back to the intake received_at.",
+      "required": [
+        "event_id",
+        "intent_id",
+        "issue_id",
+        "issue_key",
+        "jira_site_id",
+        "changelog_id",
+        "target_status_id",
+        "occurred_at",
+        "correlation_id"
+      ],
+      "properties": {
+        "event_id": { "type": "string", "format": "uuid", "description": "jira_webhook_inbox.event_id" },
+        "intent_id": { "type": "string", "format": "uuid", "description": "execution_intents.intent_id" },
+        "issue_id": { "type": "string", "description": "Authoritative Jira issue.id (re-fetched, never trusted from the payload)" },
+        "issue_key": { "type": "string", "description": "Display key, e.g. VTX-2" },
+        "jira_site_id": { "type": "string" },
+        "changelog_id": { "type": "string", "description": "Jira changelog.id of the accepted status transition" },
+        "target_status_id": { "type": "string", "description": "changelog `to` status ID; always a configured start_status_id" },
+        "occurred_at": { "type": "string", "format": "date-time", "description": "RFC3339 UTC" },
+        "occurred_at_source": {
+          "type": "string",
+          "enum": ["webhook_timestamp", "received_at"]
+        },
+        "correlation_id": { "type": "string" }
       }
     }
   }

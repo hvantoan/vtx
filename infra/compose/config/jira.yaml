@@ -1,0 +1,22 @@
+# ==============================================================================
+# Jira webhook intake policy (VTX-2 / SPEC-AUTO-01, decision comment 10015).
+# Mounted into the backend via JIRA_CONFIG_PATH. When set, this file is the
+# single source of truth for project→start-status mappings — setting
+# JIRA_PROJECT_ALLOWLIST or JIRA_READY_TO_DEV_STATUS_ID alongside it is a
+# fatal startup error (no dual control).
+#
+# start_status_ids are Jira *status* IDs (not transition IDs, not display
+# names). Verify on the tenant:
+#   curl -u "$JIRA_API_EMAIL:$JIRA_API_TOKEN" \
+#     "$JIRA_BASE_URL/rest/api/3/project/<PROJECT>/statuses"
+# A transition whose changelog `to` status ID is not listed here can never
+# produce an execution intent — it is recorded as an `invalid_transition`
+# receipt only.
+# ==============================================================================
+jira:
+  # Optional. If set here, JIRA_SITE_ID must be unset in the environment.
+  # site_id: "vtxsolution.atlassian.net"
+  projects:
+    VTX:
+      # 10007 = "Ready To Develope" on vtxsolution.atlassian.net
+      start_status_ids: ["10007"]

@@ -29,8 +29,21 @@ var (
 // own redelivery is the retry mechanism.
 const requestBudget = 3 * time.Second
 
-type StatusChecker interface {
-	FetchIssueStatus(ctx context.Context, issueID string) (statusID string, err error)
+// FetchedIssue is the authoritative identity record returned by the Jira API:
+// the service compares every field against the untrusted webhook payload.
+type FetchedIssue struct {
+	ID         string
+	Key        string
+	ProjectKey string
+	StatusID   string
+}
+
+// IssueFetcher re-fetches an issue's authoritative identity. All failure
+// modes — transport, non-200, decode errors, missing id/project/status — are
+// wrapped in ErrRetryable so the delivery is retried rather than
+// trusted-or-dropped on a Jira anomaly.
+type IssueFetcher interface {
+	FetchIssue(ctx context.Context, issueID string) (FetchedIssue, error)
 }
 
 type Client struct {
@@ -106,6 +119,7 @@ func ValidateIssueKey(key string) error {
 
 type issueResponse struct {
 	ID     string `json:"id"`
+	Key    string `json:"key"`
 	Fields struct {
 		Status struct {
 			ID   string `json:"id"`
@@ -117,14 +131,16 @@ type issueResponse struct {
 	} `json:"fields"`
 }
 
-// FetchIssueStatus re-fetches the issue and returns the CURRENT status ID —
-// the authoritative check against stale webhook payloads. Any transport or
-// non-2xx failure is wrapped in ErrRetryable (caller returns 503, no dedup
-// claim). A 404 means the issue is gone — also retryable from Jira's
-// perspective (the event may still be legitimately redelivered later).
-func (c *Client) FetchIssueStatus(ctx context.Context, issueID string) (string, error) {
+// FetchIssue re-fetches the issue and returns its authoritative identity —
+// issue ID, key, project key, and current status ID. The caller compares all
+// four against the webhook payload; trusting payload fields alone is what
+// allowed forged transitions (review P1-2). Any transport or non-2xx failure
+// is wrapped in ErrRetryable (caller returns 503, no dedup claim); so is a
+// 200 body whose id/key/project/status fields are missing or mismatched — a
+// Jira anomaly we redeliver rather than silently trust.
+func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, error) {
 	if err := ValidateIssueID(issueID); err != nil {
-		return "", err
+		return FetchedIssue{}, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, requestBudget)
@@ -138,29 +154,43 @@ func (c *Client) FetchIssueStatus(ctx context.Context, issueID string) (string, 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return FetchedIssue{}, fmt.Errorf("build request: %w", err)
 	}
 	req.SetBasicAuth(c.email, c.apiToken)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: jira api call: %v", ErrRetryable, err)
+		return FetchedIssue{}, fmt.Errorf("%w: jira api call: %v", ErrRetryable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		// 429 (any Retry-After value), 5xx, 4xx: all retryable — Jira
 		// redelivers; we never park the delivery sleeping.
-		return "", fmt.Errorf("%w: jira api status %d", ErrRetryable, resp.StatusCode)
+		return FetchedIssue{}, fmt.Errorf("%w: jira api status %d", ErrRetryable, resp.StatusCode)
 	}
 
 	var body issueResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("%w: decode issue response: %v", ErrRetryable, err)
+		return FetchedIssue{}, fmt.Errorf("%w: decode issue response: %v", ErrRetryable, err)
+	}
+	if body.ID == "" || body.ID != issueID {
+		return FetchedIssue{}, fmt.Errorf("%w: issue response id %q does not match requested %q", ErrRetryable, body.ID, issueID)
+	}
+	if body.Key == "" {
+		return FetchedIssue{}, fmt.Errorf("%w: issue response missing key", ErrRetryable)
+	}
+	if body.Fields.Project.Key == "" {
+		return FetchedIssue{}, fmt.Errorf("%w: issue response missing project.key", ErrRetryable)
 	}
 	if body.Fields.Status.ID == "" {
-		return "", fmt.Errorf("%w: issue response missing status.id", ErrRetryable)
+		return FetchedIssue{}, fmt.Errorf("%w: issue response missing status.id", ErrRetryable)
 	}
-	return body.Fields.Status.ID, nil
+	return FetchedIssue{
+		ID:         body.ID,
+		Key:        body.Key,
+		ProjectKey: body.Fields.Project.Key,
+		StatusID:   body.Fields.Status.ID,
+	}, nil
 }

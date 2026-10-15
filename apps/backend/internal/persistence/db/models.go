@@ -72,3 +72,15 @@ type TaskEvent struct {
 	Payload   string             `json:"payload"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
+
+type WebhookReceipt struct {
+	ReceiptID   pgtype.UUID        `json:"receipt_id"`
+	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
+	Outcome     string             `json:"outcome"`
+	ReasonCode  pgtype.Text        `json:"reason_code"`
+	RequestID   pgtype.Text        `json:"request_id"`
+	PayloadHash pgtype.Text        `json:"payload_hash"`
+	IssueKey    pgtype.Text        `json:"issue_key"`
+	ErrorDetail pgtype.Text        `json:"error_detail"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
