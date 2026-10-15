@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteExpiredWebhookReceipts = `-- name: DeleteExpiredWebhookReceipts :execrows
+DELETE FROM webhook_receipts
+WHERE outcome IN ('ignored_scope', 'invalid_transition', 'rejected')
+  AND received_at < now() - make_interval(days => $1)
+`
+
+// Retention: terminal noise receipts age out; accepted/duplicate rows and
+// inbox rows are kept as the dedup/audit record.
+func (q *Queries) DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredWebhookReceipts, days)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getJiraWebhookInboxByEventKey = `-- name: GetJiraWebhookInboxByEventKey :one
 SELECT event_id, jira_site_id, issue_id, issue_key, changelog_id,
     target_status_id, outcome, payload_hash, request_id, correlation_id,
@@ -177,6 +193,44 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertWebhookReceipt = `-- name: InsertWebhookReceipt :one
+INSERT INTO webhook_receipts (
+    received_at, outcome, reason_code, request_id, payload_hash,
+    issue_key, error_detail
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING receipt_id
+`
+
+type InsertWebhookReceiptParams struct {
+	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
+	Outcome     string             `json:"outcome"`
+	ReasonCode  pgtype.Text        `json:"reason_code"`
+	RequestID   pgtype.Text        `json:"request_id"`
+	PayloadHash pgtype.Text        `json:"payload_hash"`
+	IssueKey    pgtype.Text        `json:"issue_key"`
+	ErrorDetail pgtype.Text        `json:"error_detail"`
+}
+
+// Append-only audit row for every authenticated webhook request. Written
+// AFTER processing settles (best-effort, outside the acceptance tx) — a
+// failure here logs an error and never changes the HTTP response.
+func (q *Queries) InsertWebhookReceipt(ctx context.Context, arg InsertWebhookReceiptParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertWebhookReceipt,
+		arg.ReceivedAt,
+		arg.Outcome,
+		arg.ReasonCode,
+		arg.RequestID,
+		arg.PayloadHash,
+		arg.IssueKey,
+		arg.ErrorDetail,
+	)
+	var receipt_id pgtype.UUID
+	err := row.Scan(&receipt_id)
+	return receipt_id, err
 }
 
 const updateJiraWebhookInboxOutcome = `-- name: UpdateJiraWebhookInboxOutcome :exec

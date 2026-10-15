@@ -77,10 +77,14 @@ services:
       - JIRA_BASE_URL=${JIRA_BASE_URL}
       - JIRA_API_EMAIL=${JIRA_API_EMAIL}
       - JIRA_API_TOKEN=${JIRA_API_TOKEN}
-      - JIRA_PROJECT_ALLOWLIST=${JIRA_PROJECT_ALLOWLIST}
-      - JIRA_READY_TO_DEV_STATUS_ID=${JIRA_READY_TO_DEV_STATUS_ID}
+      # Jira intake policy comes from the mounted YAML file (single source of
+      # truth); legacy JIRA_PROJECT_ALLOWLIST/JIRA_READY_TO_DEV_STATUS_ID env
+      # keys must stay unset while JIRA_CONFIG_PATH is present.
+      - JIRA_CONFIG_PATH=/etc/vtx/jira.yaml
       - JIRA_SITE_ID=${JIRA_SITE_ID}
       - GATEWAY_INTERNAL_AUTH_TOKEN=${GATEWAY_INTERNAL_AUTH_TOKEN}
+    volumes:
+      - ./config/jira.yaml:/etc/vtx/jira.yaml:ro
     ports:
       - "${VTX_API_PORT:-49080}:49080"
 

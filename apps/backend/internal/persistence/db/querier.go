@@ -6,11 +6,16 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateTaskEvent(ctx context.Context, arg CreateTaskEventParams) (TaskEvent, error)
+	// Retention: terminal noise receipts age out; accepted/duplicate rows and
+	// inbox rows are kept as the dedup/audit record.
+	DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
 	GetTask(ctx context.Context, id string) (Task, error)
 	InsertExecutionIntent(ctx context.Context, arg InsertExecutionIntentParams) (ExecutionIntent, error)
@@ -20,6 +25,10 @@ type Querier interface {
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (OutboxEvent, error)
+	// Append-only audit row for every authenticated webhook request. Written
+	// AFTER processing settles (best-effort, outside the acceptance tx) — a
+	// failure here logs an error and never changes the HTTP response.
+	InsertWebhookReceipt(ctx context.Context, arg InsertWebhookReceiptParams) (pgtype.UUID, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.

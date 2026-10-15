@@ -96,7 +96,13 @@ paths:
         deduplicates status transitions on
         (jira_site_id, issue_id, changelog_id, target_status_id), and records
         exactly one durable execution intent + outbox event per unique
-        transition to "Ready To Develope". Reachable only through the Nginx
+        transition whose `to` status ID is a configured start status for the
+        issue's project (per-project `start_status_ids` in the Jira intake
+        config — transitions to any other target are `invalid_transition`
+        receipts, never intents). Accepted events publish outbox payload
+        `execution_intent.created.v1`: event_id, intent_id, issue_id,
+        issue_key, jira_site_id, changelog_id, target_status_id, occurred_at,
+        occurred_at_source, correlation_id. Reachable only through the Nginx
         webhook gateway, which injects the internal Bearer token after
         validating the URL path secret. Public exposure is prohibited.
       operationId: intakeJiraWebhook
@@ -144,7 +150,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Structurally valid envelope that cannot be processed
+          description: >
+            Structurally valid but unprocessable: the transition target is not
+            a configured start status for the issue's project
+            (invalid_transition).
           content:
             application/json:
               schema:

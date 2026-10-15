@@ -23,18 +23,27 @@ type Config struct {
 	AgentRuntimeDir   string
 	AgentTaskTimeout  time.Duration
 
-	// Jira webhook intake (VTX-2)
+	// Jira webhook intake (VTX-2). The project→start-status mapping resolves
+	// into JiraProjects from exactly one source: JIRA_CONFIG_PATH (YAML) or
+	// the legacy JIRA_PROJECT_ALLOWLIST × JIRA_READY_TO_DEV_STATUS_ID env
+	// pair. Both set → fatal (no dual control, no silent merge).
 	JiraBaseURL              string
 	JiraAPIEmail             string
 	JiraAPIToken             string
-	JiraProjectAllowlist     []string
-	JiraReadyToDevStatusID   string
+	JiraConfigPath           string
+	JiraProjects             map[string]JiraProjectConfig
 	JiraSiteID               string
 	GatewayInternalAuthToken string
+
+	// Legacy env fallback inputs — read in Load(), consumed by
+	// loadJiraIntake(), never read by downstream code.
+	JiraProjectAllowlist  []string
+	JiraLegacyReadyStatus string
+	jiraConfigErr         error
 }
 
 func Load() *Config {
-	return &Config{
+	c := &Config{
 		Port:              getEnv("PORT", "49080"),
 		Host:              getEnv("API_HOST", "0.0.0.0"),
 		Env:               getEnv("APP_ENV", "development"),
@@ -52,11 +61,14 @@ func Load() *Config {
 		JiraBaseURL:              getEnv("JIRA_BASE_URL", ""),
 		JiraAPIEmail:             getEnv("JIRA_API_EMAIL", ""),
 		JiraAPIToken:             getEnv("JIRA_API_TOKEN", ""),
+		JiraConfigPath:           getEnv("JIRA_CONFIG_PATH", ""),
 		JiraProjectAllowlist:     splitCSV(getEnv("JIRA_PROJECT_ALLOWLIST", "")),
-		JiraReadyToDevStatusID:   getEnv("JIRA_READY_TO_DEV_STATUS_ID", ""),
+		JiraLegacyReadyStatus:    getEnv("JIRA_READY_TO_DEV_STATUS_ID", ""),
 		JiraSiteID:               getEnv("JIRA_SITE_ID", ""),
 		GatewayInternalAuthToken: getEnv("GATEWAY_INTERNAL_AUTH_TOKEN", ""),
 	}
+	c.loadJiraIntake()
+	return c
 }
 
 // Validate enforces fail-closed startup invariants for the webhook intake.
@@ -69,11 +81,17 @@ func (c *Config) Validate() error {
 	if c.GatewayInternalAuthToken == c.AuthToken {
 		return fmt.Errorf("GATEWAY_INTERNAL_AUTH_TOKEN must differ from API_AUTH_TOKEN (the public dashboard token)")
 	}
+	if c.jiraConfigErr != nil {
+		return c.jiraConfigErr
+	}
 	for _, missing := range requiredJira(c) {
 		return fmt.Errorf("%s is required for the Jira webhook intake", missing)
 	}
 	if !strings.HasPrefix(c.JiraBaseURL, "https://") && !strings.HasPrefix(c.JiraBaseURL, "http://") {
 		return fmt.Errorf("JIRA_BASE_URL must be an http(s) URL (got %q)", c.JiraBaseURL)
+	}
+	if err := c.validateJiraProjects(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -89,11 +107,8 @@ func requiredJira(c *Config) []string {
 	if c.JiraAPIToken == "" {
 		missing = append(missing, "JIRA_API_TOKEN")
 	}
-	if len(c.JiraProjectAllowlist) == 0 {
-		missing = append(missing, "JIRA_PROJECT_ALLOWLIST")
-	}
-	if c.JiraReadyToDevStatusID == "" {
-		missing = append(missing, "JIRA_READY_TO_DEV_STATUS_ID")
+	if len(c.JiraProjects) == 0 {
+		missing = append(missing, "JIRA_CONFIG_PATH or JIRA_PROJECT_ALLOWLIST+JIRA_READY_TO_DEV_STATUS_ID")
 	}
 	if c.JiraSiteID == "" {
 		missing = append(missing, "JIRA_SITE_ID")

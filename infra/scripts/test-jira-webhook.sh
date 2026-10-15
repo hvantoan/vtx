@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# VTX-2 Jira Webhook Intake E2E — JT-01..JT-18 (SPEC-AUTO-01)
+# VTX-2 Jira Webhook Intake E2E — JT-01..JT-21 (SPEC-AUTO-01)
 # Runs against the Compose stack + jira-stub (mock Jira REST API).
 # Every dedup assertion checks DB row counts, not just HTTP responses.
 #
@@ -12,7 +12,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-ENV_FILE="$REPO_ROOT/.env"
+ENV_FILE="${JT_ENV_FILE:-$REPO_ROOT/.env}"
 set -a; source "$ENV_FILE"; set +a
 
 COMPOSE=(docker compose --env-file "$ENV_FILE"
@@ -65,10 +65,12 @@ count_inbox()    { "${PSQL[@]}" "SELECT count(*) FROM jira_webhook_inbox WHERE c
 count_intents()  { "${PSQL[@]}" "SELECT count(*) FROM execution_intents WHERE issue_key='$1'"; }
 count_outbox()   { "${PSQL[@]}" "SELECT count(*) FROM outbox_events WHERE payload->>'issue_key'='$1'"; }
 inbox_outcome()  { "${PSQL[@]}" "SELECT outcome FROM jira_webhook_inbox WHERE changelog_id='$1' LIMIT 1"; }
+count_receipts() { "${PSQL[@]}" "SELECT count(*) FROM webhook_receipts WHERE issue_key='$1'"; }
 
 cleanup() {
   "${PSQL[@]}" "DELETE FROM outbox_events" >/dev/null
   "${PSQL[@]}" "DELETE FROM jira_webhook_inbox" >/dev/null
+  "${PSQL[@]}" "DELETE FROM webhook_receipts" >/dev/null
   "${PSQL[@]}" "DELETE FROM execution_intents" >/dev/null
 }
 
@@ -188,15 +190,15 @@ else
 fi
 
 echo "--- Concurrency (JT-03a single replica, JT-03b two replicas) -------"
-# Single replica, 8 parallel deliveries of a NEW transition key.
+# AC-02 scale: 20 parallel deliveries of a NEW transition key per instance.
 cleanup
-for i in $(seq 1 8); do send_issue 190002 VTX-102 cl-conc-1 10007 >"/tmp/jt_par_$i" & done
+for i in $(seq 1 20); do send_issue 190002 VTX-102 cl-conc-1 10007 >"/tmp/jt_par_$i" & done
 wait
 ACC=$(grep -l 202 /tmp/jt_par_* | wc -l); DUP=$(grep -l 200 /tmp/jt_par_* | wc -l)
-if [ "$(count_intents VTX-102)" = "1" ] && [ "$ACC" = "1" ] && [ "$DUP" = "7" ]; then
-  ok "JT-03a" "8 parallel deliveries, 1 replica -> 1 intent (1x202 + 7x200)"
+if [ "$(count_intents VTX-102)" = "1" ] && [ "$(count_outbox VTX-102)" = "1" ] && [ "$ACC" = "1" ] && [ "$DUP" = "19" ]; then
+  ok "JT-03a" "20 parallel deliveries, 1 replica -> 1 intent (1x202 + 19x200)"
 else
-  bad "JT-03a" "parallel dedup -> intents=$(count_intents VTX-102) acc=$ACC dup=$DUP"
+  bad "JT-03a" "parallel dedup -> intents=$(count_intents VTX-102) outbox=$(count_outbox VTX-102) acc=$ACC dup=$DUP"
 fi
 
 # Two replicas — proves dedup is DB-enforced, not an in-process mutex.
@@ -205,16 +207,52 @@ cleanup
 sleep 4
 REPLICAS=$(docker compose --env-file "$ENV_FILE" -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.e2e.yml -f "$SCALE_FILE" --profile e2e ps -q backend | wc -l)
 note "backend replicas: $REPLICAS"
-for i in $(seq 1 8); do send_issue 190003 VTX-103 cl-conc-2 10007 >"/tmp/jt_par2_$i" & done
+for i in $(seq 1 20); do send_issue 190003 VTX-103 cl-conc-2 10007 >"/tmp/jt_par2_$i" & done
 wait
 ACC=$(grep -l 202 /tmp/jt_par2_* | wc -l); DUP=$(grep -l 200 /tmp/jt_par2_* | wc -l)
-if [ "$REPLICAS" -ge 2 ] && [ "$(count_intents VTX-103)" = "1" ] && [ "$ACC" = "1" ] && [ "$DUP" = "7" ]; then
-  ok "JT-03b" "8 parallel deliveries, $REPLICAS replicas -> 1 intent"
+if [ "$REPLICAS" -ge 2 ] && [ "$(count_intents VTX-103)" = "1" ] && [ "$ACC" = "1" ] && [ "$DUP" = "19" ]; then
+  ok "JT-03b" "20 parallel deliveries, $REPLICAS replicas -> 1 intent"
 else
   bad "JT-03b" "scaled dedup -> replicas=$REPLICAS intents=$(count_intents VTX-103) acc=$ACC dup=$DUP"
 fi
 "${COMPOSE[@]}" -f "$SCALE_FILE" --profile e2e up -d --scale backend=1 >/dev/null 2>&1
 sleep 4
+cleanup
+
+echo "--- Review fixes: forged target + forged identity (P1-1, P1-2) ------"
+# Forged transition to a NON-start status while the issue sits in 10007:
+# must produce an invalid_transition receipt, ZERO inbox rows, ZERO intents,
+# and must never reach the Jira API (gate runs before dedup + fetch).
+S=$(send_issue 190006 VTX-106 cl-forge-1 10005)
+BODY=$(cat /tmp/jt_resp.json)
+if [ "$(count_inbox cl-forge-1)" = "0" ] && [ "$(count_intents VTX-106)" = "0" ] \
+   && [ "$(count_receipts VTX-106)" -ge 1 ] && echo "$BODY" | grep -q invalid_transition; then
+  ok "JT-19" "forged non-start target -> $S invalid_transition receipt, no inbox/intent"
+else
+  bad "JT-19" "forged target -> got $S $BODY inbox=$(count_inbox cl-forge-1) intents=$(count_intents VTX-106)"
+fi
+
+# Forged identity: payload claims project VTX; the stub's authoritative view
+# says the issue belongs to OTHER -> ignored_scope inbox row, no intent.
+S=$(send_issue 190701 VTX-107 cl-forge-2 10007)
+if [ "$S" = "202" ] && [ "$(inbox_outcome cl-forge-2)" = "ignored_scope" ] \
+   && [ "$(count_intents VTX-107)" = "0" ]; then
+  ok "JT-20" "identity mismatch (VTX claim, OTHER actual) -> ignored_scope, no intent"
+else
+  bad "JT-20" "identity mismatch -> got $S outcome=$(inbox_outcome cl-forge-2)"
+fi
+
+# Receipts audit: redelivery of a claimed key appends duplicate receipts while
+# the inbox stays at exactly 1 row (append-only, never deduped).
+send_issue 190007 VTX-108 cl-rcpt-1 10007 >/dev/null
+send_issue 190007 VTX-108 cl-rcpt-1 10007 >/dev/null
+send_issue 190007 VTX-108 cl-rcpt-1 10007 >/dev/null
+RC=$(count_receipts VTX-108)
+if [ "$(count_inbox cl-rcpt-1)" = "1" ] && [ "$RC" -ge 3 ]; then
+  ok "JT-21" "receipts append-only: 3 deliveries -> $RC receipt rows for VTX-108, 1 inbox row"
+else
+  bad "JT-21" "receipts -> inbox=$(count_inbox cl-rcpt-1) receipts=$RC"
+fi
 cleanup
 
 echo "--- Status verification & scope (JT-10, JT-16) --------------------"

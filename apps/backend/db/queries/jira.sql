@@ -50,3 +50,22 @@ SET intent_id = $2,
     outcome = $3,
     updated_at = CURRENT_TIMESTAMP
 WHERE event_id = $1;
+
+-- name: InsertWebhookReceipt :one
+-- Append-only audit row for every authenticated webhook request. Written
+-- AFTER processing settles (best-effort, outside the acceptance tx) — a
+-- failure here logs an error and never changes the HTTP response.
+INSERT INTO webhook_receipts (
+    received_at, outcome, reason_code, request_id, payload_hash,
+    issue_key, error_detail
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING receipt_id;
+
+-- name: DeleteExpiredWebhookReceipts :execrows
+-- Retention: terminal noise receipts age out; accepted/duplicate rows and
+-- inbox rows are kept as the dedup/audit record.
+DELETE FROM webhook_receipts
+WHERE outcome IN ('ignored_scope', 'invalid_transition', 'rejected')
+  AND received_at < now() - make_interval(days => $1);

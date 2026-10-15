@@ -1,0 +1,44 @@
+# ==============================================================================
+# Production overlay — network boundary for the webhook intake (VTX-2 P1-3).
+#
+#   docker compose --env-file .env \
+#     -f infra/compose/docker-compose.yml \
+#     -f infra/compose/docker-compose.prod.yml up -d
+#
+# In production the ONLY public surface is the nginx gateway (443). The
+# backend carries no host port: the webhook route is authenticated by
+# GATEWAY_INTERNAL_AUTH_TOKEN alone, so a published port would let clients
+# bypass layer-1 (path secret) and layer-2 is a bearer token, not a network
+# boundary. postgres/temporal/temporal-ui are equally internal-only.
+#
+# `web` keeps no host binding either: production traffic enters through the
+# gateway. If a deployment ever needs the dashboard exposed directly, publish
+# it deliberately in a dedicated overlay — not here.
+#
+# `ports: !reset []` requires Docker Compose v2.24.4+ (compose spec). Verify
+# the rendered config with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+# ==============================================================================
+name: vtx
+
+services:
+  postgres:
+    ports: !reset []
+
+  temporal:
+    ports: !reset []
+
+  temporal-ui:
+    ports: !reset []
+
+  backend:
+    ports: !reset []
+    environment:
+      - APP_ENV=production
+
+  web:
+    ports: !reset []
+    environment:
+      # Backend is only reachable on the compose network in prod.
+      - NEXT_PUBLIC_API_URL=http://backend:49080
+      - NEXT_PUBLIC_APP_ENV=production
