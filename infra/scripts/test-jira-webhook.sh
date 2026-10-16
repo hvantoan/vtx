@@ -36,7 +36,7 @@ resolve_ports() {
 SECRET="${WEBHOOK_PATH_SECRET_PRIMARY:?missing in .env}"
 SECONDARY="secondaryrot9e2b4a1c8d7f3e6b5a9c0d2e4f6a8b1c3d5e7f9a0b"
 GWT="${GATEWAY_INTERNAL_AUTH_TOKEN:?missing in .env}"
-PSQL=(docker exec vtx-postgres psql -U vtx_user -d vtx_platform -tAc)
+PSQL=("${COMPOSE[@]}" exec -T postgres psql -U vtx_user -d vtx_platform -tAc)
 
 PASS=0; FAIL=0; FAILED_CASES=()
 

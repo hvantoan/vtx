@@ -1,9 +1,8 @@
-name: vtx
+name: ${COMPOSE_PROJECT_NAME:-vtx}
 
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: vtx-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: vtx_user
@@ -22,7 +21,6 @@ services:
 
   temporal:
     image: temporalio/auto-setup:1.26.2
-    container_name: vtx-temporal
     restart: unless-stopped
     depends_on:
       postgres:
@@ -45,7 +43,6 @@ services:
 
   temporal-ui:
     image: temporalio/ui:2.34.0
-    container_name: vtx-temporal-ui
     restart: unless-stopped
     depends_on:
       - temporal
@@ -72,7 +69,7 @@ services:
       - DATABASE_URL=postgres://vtx_user:vtx_password@postgres:5432/vtx_platform?sslmode=disable
       - TEMPORAL_HOST_PORT=temporal:7233
       - TEMPORAL_NAMESPACE=default
-      - TEMPORAL_TASK_QUEUE=vtx-task-queue
+      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-vtx-task-queue}
       - API_AUTH_TOKEN=vtx-dev-secret-token-change-in-production
       - JIRA_BASE_URL=${JIRA_BASE_URL}
       - JIRA_API_EMAIL=${JIRA_API_EMAIL}
@@ -112,7 +109,6 @@ services:
     build:
       context: ../..
       dockerfile: apps/web/Dockerfile
-    container_name: vtx-web
     restart: unless-stopped
     depends_on:
       - backend
@@ -123,7 +119,7 @@ services:
       - "${VTX_WEB_PORT:-49030}:49030"
 
 networks:
-  default:
-    name: vtx_net
+  default: {}
+
 volumes:
   postgres_data:

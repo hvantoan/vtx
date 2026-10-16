@@ -33,7 +33,7 @@ echo "  ✅ Binaries compiled successfully." | tee -a "$COMBINED_LOG"
 # Verify Temporal cluster connectivity
 echo "Step 1: Checking Temporal cluster connectivity..." | tee -a "$COMBINED_LOG"
 if ! ./apps/backend/bin/cli worker status | grep -q "ONLINE"; then
-    echo "❌ Error: Temporal is not ONLINE at localhost:49233. Ensure docker compose is running." | tee -a "$COMBINED_LOG"
+    echo "❌ Error: Temporal is not ONLINE at ${TEMPORAL_HOST_PORT:-localhost:49233}. Ensure docker compose is running." | tee -a "$COMBINED_LOG"
     exit 1
 fi
 echo "  ✅ Temporal server is ONLINE." | tee -a "$COMBINED_LOG"
