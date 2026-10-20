@@ -39,6 +39,8 @@ type Querier interface {
 	// I-03 read side: the partial unique index is the enforcement, this is the
 	// branch selector for admit-vs-defer.
 	HasActiveRunForTask(ctx context.Context, taskID pgtype.UUID) (bool, error)
+	// An intent is consumed once it has either an admitted run or a deferred row.
+	HasConsumedIntent(ctx context.Context, intentID pgtype.UUID) (bool, error)
 	// ON CONFLICT DO NOTHING ⇒ replaying the same intent yields no row (the
 	// inbox receipt already deduped it, this is belt and braces).
 	InsertDeferredIntent(ctx context.Context, arg InsertDeferredIntentParams) (DeferredIntent, error)
@@ -72,6 +74,10 @@ type Querier interface {
 	// a NULL cursor means "from the beginning", not "after 0".
 	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
+	// Serialize deliveries that refer to the same intent, even when they carry
+	// different source event IDs. The intent row is created before its outbox
+	// event, so a missing row is a payload contract fault.
+	LockExecutionIntent(ctx context.Context, intentID pgtype.UUID) (pgtype.UUID, error)
 	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
 	// second ACK for the same event reports 0 rows.
 	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)

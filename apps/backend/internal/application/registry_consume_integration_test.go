@@ -197,6 +197,76 @@ func TestConsumeIntentAdmitsThenReplays(t *testing.T) {
 	}
 }
 
+// TestConsumeIntentDifferentEventsForOneIntent: a new source event ID must
+// not bypass exactly-once-per-intent after the first delivery was admitted.
+func TestConsumeIntentDifferentEventsForOneIntent(t *testing.T) {
+	h := newRegistryHarness(t)
+	issueID := h.uniqueIssue()
+	t.Cleanup(func() { h.cleanup("vtxsolution.atlassian.net", issueID) })
+
+	intent := h.seedIntent("VTX-" + issueID)
+	first, err := h.svc.ConsumeIntent(context.Background(), h.payload(intent, newEventID(t, h.pool), issueID, "VTX-"+issueID))
+	if err != nil {
+		t.Fatalf("first consume: %v", err)
+	}
+	if first.Deferred || first.RunID == "" {
+		t.Fatalf("first consume = %+v, want an admitted run", first)
+	}
+
+	replay, err := h.svc.ConsumeIntent(context.Background(), h.payload(intent, newEventID(t, h.pool), issueID, "VTX-"+issueID))
+	if err != nil {
+		t.Fatalf("different-event replay: %v", err)
+	}
+	if !replay.Duplicate || replay.Deferred || replay.RunID != "" {
+		t.Fatalf("different-event replay = %+v, want duplicate with no new effect", replay)
+	}
+	if got := h.count(`SELECT count(*) FROM task_runs WHERE intent_id=$1`, intent.IntentID); got != 1 {
+		t.Errorf("runs for intent = %d, want 1", got)
+	}
+	if got := h.count(`SELECT count(*) FROM deferred_intents WHERE intent_id=$1`, intent.IntentID); got != 0 {
+		t.Errorf("deferred rows for admitted intent = %d, want 0", got)
+	}
+	if got := h.count(`SELECT count(*) FROM outbox_events WHERE intent_id=$1`, intent.IntentID); got != 1 {
+		t.Errorf("outbox rows for admitted intent = %d, want 1", got)
+	}
+}
+
+// TestConsumeDeferredIntentDifferentEvents: a new source event ID must not
+// emit a second deferred row or deferred outbox event either.
+func TestConsumeDeferredIntentDifferentEvents(t *testing.T) {
+	h := newRegistryHarness(t)
+	ctx := context.Background()
+	issueID := h.uniqueIssue()
+	t.Cleanup(func() { h.cleanup("vtxsolution.atlassian.net", issueID) })
+
+	active := h.seedIntent("VTX-" + issueID)
+	if _, err := h.svc.ConsumeIntent(ctx, h.payload(active, newEventID(t, h.pool), issueID, "VTX-"+issueID)); err != nil {
+		t.Fatalf("active consume: %v", err)
+	}
+	intent := h.seedIntent("VTX-" + issueID)
+	first, err := h.svc.ConsumeIntent(ctx, h.payload(intent, newEventID(t, h.pool), issueID, "VTX-"+issueID))
+	if err != nil {
+		t.Fatalf("first deferred consume: %v", err)
+	}
+	if !first.Deferred || first.RunID != "" {
+		t.Fatalf("first deferred consume = %+v, want deferred", first)
+	}
+
+	replay, err := h.svc.ConsumeIntent(ctx, h.payload(intent, newEventID(t, h.pool), issueID, "VTX-"+issueID))
+	if err != nil {
+		t.Fatalf("different-event deferred replay: %v", err)
+	}
+	if !replay.Duplicate || replay.Deferred || replay.RunID != "" {
+		t.Fatalf("different-event deferred replay = %+v, want duplicate with no new effect", replay)
+	}
+	if got := h.count(`SELECT count(*) FROM deferred_intents WHERE intent_id=$1`, intent.IntentID); got != 1 {
+		t.Errorf("deferred rows for intent = %d, want 1", got)
+	}
+	if got := h.count(`SELECT count(*) FROM outbox_events WHERE event_type=$1 AND intent_id=$2`, application.OutboxEventTaskRunIntentDeferred, intent.IntentID); got != 1 {
+		t.Errorf("deferred outbox rows for intent = %d, want 1", got)
+	}
+}
+
 // TestConsumeIntentDefersWhileARunIsActive: TR-10/I-04 — a second intent for a
 // task with an active run lands in the FIFO wait queue and never starts a run.
 func TestConsumeIntentDefersWhileARunIsActive(t *testing.T) {

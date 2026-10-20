@@ -138,8 +138,20 @@ func (s *PgRegistryStore) ConsumeIntent(
 		return application.ConsumeOutcome{}, fmt.Errorf("%w: intent_id %q", application.ErrPayloadInvalid, evt.IntentID)
 	}
 
-	// The receipt is the dedup gate and is written before anything else: a
-	// replay finds the row and leaves the database untouched (I-02, TR-19).
+	// Serialize every delivery for the same intent before using the
+	// source-event receipt as the transport-level dedup gate. This prevents a
+	// different source_event_id from turning an already admitted intent into a
+	// deferred intent (or emitting another deferred outbox event).
+	if _, err := qtx.LockExecutionIntent(ctx, intentID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return application.ConsumeOutcome{}, fmt.Errorf("%w: intent %s has no execution_intents row", application.ErrPayloadInvalid, evt.IntentID)
+		}
+		return application.ConsumeOutcome{}, fmt.Errorf("lock execution intent: %w", err)
+	}
+
+	// Once the intent lock is held, the receipt is the transport-level dedup
+	// gate: a replay finds the row and leaves the database untouched (I-02,
+	// TR-19).
 	if _, err := qtx.InsertInboxConsumption(ctx, db.InsertInboxConsumptionParams{
 		ConsumerName:  plan.Consumer,
 		SourceEventID: eventID,
@@ -147,6 +159,17 @@ func (s *PgRegistryStore) ConsumeIntent(
 		return application.ConsumeOutcome{Duplicate: true}, nil
 	} else if err != nil {
 		return application.ConsumeOutcome{}, fmt.Errorf("insert receipt: %w", err)
+	}
+
+	consumed, err := qtx.HasConsumedIntent(ctx, intentID)
+	if err != nil {
+		return application.ConsumeOutcome{}, fmt.Errorf("check consumed intent: %w", err)
+	}
+	if consumed {
+		if err := tx.Commit(ctx); err != nil {
+			return application.ConsumeOutcome{}, fmt.Errorf("commit duplicate intent receipt: %w", err)
+		}
+		return application.ConsumeOutcome{Duplicate: true}, nil
 	}
 
 	task, err := qtx.UpsertRegistryTask(ctx, db.UpsertRegistryTaskParams{

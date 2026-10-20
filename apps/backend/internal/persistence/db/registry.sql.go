@@ -140,6 +140,22 @@ func (q *Queries) HasActiveRunForTask(ctx context.Context, taskID pgtype.UUID) (
 	return has_active, err
 }
 
+const hasConsumedIntent = `-- name: HasConsumedIntent :one
+SELECT EXISTS (
+    SELECT 1 FROM task_runs WHERE task_runs.intent_id = $1
+    UNION ALL
+    SELECT 1 FROM deferred_intents WHERE deferred_intents.intent_id = $1
+) AS consumed
+`
+
+// An intent is consumed once it has either an admitted run or a deferred row.
+func (q *Queries) HasConsumedIntent(ctx context.Context, intentID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasConsumedIntent, intentID)
+	var consumed bool
+	err := row.Scan(&consumed)
+	return consumed, err
+}
+
 const insertDeferredIntent = `-- name: InsertDeferredIntent :one
 INSERT INTO deferred_intents (
     intent_id, task_id, disposition, reason
@@ -407,6 +423,23 @@ func (q *Queries) ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockExecutionIntent = `-- name: LockExecutionIntent :one
+SELECT intent_id
+FROM execution_intents
+WHERE intent_id = $1
+FOR UPDATE
+`
+
+// Serialize deliveries that refer to the same intent, even when they carry
+// different source event IDs. The intent row is created before its outbox
+// event, so a missing row is a payload contract fault.
+func (q *Queries) LockExecutionIntent(ctx context.Context, intentID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockExecutionIntent, intentID)
+	var intent_id pgtype.UUID
+	err := row.Scan(&intent_id)
+	return intent_id, err
 }
 
 const updateTaskRunState = `-- name: UpdateTaskRunState :one

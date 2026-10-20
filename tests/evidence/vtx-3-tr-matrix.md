@@ -1,7 +1,7 @@
 # VTX-3 — TR-01..TR-25 Evidence Matrix
 
 - **Spec:** SPEC-AUTO-02 v1.1 (Jira VTX-3)
-- **Tree:** working tree on top of `85a7d9a` (48 changed/new paths, **not yet committed**)
+- **Tree:** committed at `a0186816a87a7c07c2fda6f729ff858c77878690` when this matrix was captured
 - **Local DB:** PostgreSQL 17 via Compose, schema migrated by `db/migrations` (goose up from empty and from the VTX-2 shape)
 - **Rule:** a row is `PASS` only when a committed test or script reproduces it locally; everything unproven is `BLOCKED` with the reason.
 
@@ -56,7 +56,7 @@ make test-boundaries
 
 | Item | Status | Why | Unblock |
 |---|---|---|---|
-| CI green at an exact SHA | **BLOCKED** | This matrix was produced from a working tree on top of `85a7d9a`; there is no commit or pipeline run for it yet. Local `make vet`, `make typecheck`, `make test`, `make test-boundaries`, `make test-integration`, `make build` and the Compose harness all pass, but that is not a CI verdict. | Commit, push, and attach the green run for that SHA. |
+| CI green at an exact SHA | **BLOCKED** | No CI verdict is claimed for this matrix. Local `make vet`, `make typecheck`, `make test`, `make test-boundaries`, `make test-integration`, `make build` and the Compose harness pass, but that is not a CI verdict. | Push the commit and attach the green run for that SHA. |
 | 20-writer concurrency in CI | PASS locally, **BLOCKED in CI** | TR-07 drives two API replicas through `docker exec`; the workflow runs the registry harness, but the CI run for this SHA does not exist yet. | The workflow step exists (`VTX-3 registry outbox harness`); it turns into evidence on the first green run. |
 
 ## Reviewer notes

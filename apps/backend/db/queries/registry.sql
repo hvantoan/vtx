@@ -17,6 +17,23 @@ SET jira_issue_key = EXCLUDED.jira_issue_key,
 RETURNING id, jira_site_id, jira_issue_id, jira_issue_key, project_key,
     version, created_at, updated_at;
 
+-- name: LockExecutionIntent :one
+-- Serialize deliveries that refer to the same intent, even when they carry
+-- different source event IDs. The intent row is created before its outbox
+-- event, so a missing row is a payload contract fault.
+SELECT intent_id
+FROM execution_intents
+WHERE intent_id = $1
+FOR UPDATE;
+
+-- name: HasConsumedIntent :one
+-- An intent is consumed once it has either an admitted run or a deferred row.
+SELECT EXISTS (
+    SELECT 1 FROM task_runs WHERE task_runs.intent_id = $1
+    UNION ALL
+    SELECT 1 FROM deferred_intents WHERE deferred_intents.intent_id = $1
+) AS consumed;
+
 -- name: GetRegistryTaskByIdentity :one
 SELECT id, jira_site_id, jira_issue_id, jira_issue_key, project_key,
     version, created_at, updated_at
