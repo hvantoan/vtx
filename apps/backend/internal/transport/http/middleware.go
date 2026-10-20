@@ -1,11 +1,14 @@
 package http
 
 import (
+	"context"
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/vtx/platform/internal/domain"
 )
 
 func LoggerMiddleware(logger *slog.Logger) func(next http.Handler) http.Handler {
@@ -35,14 +38,7 @@ func LoggerMiddleware(logger *slog.Logger) func(next http.Handler) http.Handler 
 func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var token string
-			authHeader := r.Header.Get("Authorization")
-			if authHeader != "" {
-				parts := strings.SplitN(authHeader, " ", 2)
-				if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-					token = parts[1]
-				}
-			}
+			token := bearerToken(r)
 			if token == "" {
 				http.Error(w, `{"error":"unauthorized","message":"Missing authorization token in Authorization header"}`, http.StatusUnauthorized)
 				return
@@ -57,6 +53,20 @@ func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Han
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// bearerToken extracts the credential from an `Authorization: Bearer <token>`
+// header. Empty when absent or malformed.
+func bearerToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return ""
+	}
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
 }
 
 // GatewayAuthMiddleware guards the Jira webhook intake on the dedicated
@@ -80,4 +90,56 @@ func (rw *responseWriter) Flush() {
 	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+// registryActorKey is the context key for the authenticated principal. The
+// type is unexported so no other package can forge an actor.
+type registryActorKey struct{}
+
+// RegistryActorMiddleware authenticates a registry caller and stores the actor
+// it may act as. The actor is derived ONLY from the token (D5): a request body
+// can never choose its own principal.
+//
+// Every configured token is compared in constant time before any branch, so the
+// response time does not reveal which slot (or whether any slot) matched.
+func RegistryActorMiddleware(tokens map[domain.Actor]string) func(next http.Handler) http.Handler {
+	// Fixed evaluation order keeps the comparison count independent of input.
+	order := []domain.Actor{domain.ActorScheduler, domain.ActorOrchestrator, domain.ActorOperator, domain.ActorPolicy}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := bearerToken(r)
+			if token == "" {
+				writeRegistryError(w, http.StatusUnauthorized, "unauthorized", "Missing authorization token in Authorization header")
+				return
+			}
+
+			var actor domain.Actor
+			matched := 0
+			for _, candidate := range order {
+				expected := tokens[candidate]
+				if expected == "" {
+					continue
+				}
+				if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
+					actor = candidate
+					matched++
+				}
+			}
+			// matched > 1 is impossible after ValidateRegistry, but treating it
+			// as a rejection keeps a misconfigured deployment fail-closed.
+			if matched != 1 {
+				writeRegistryError(w, http.StatusUnauthorized, "unauthorized", "Invalid authentication token")
+				return
+			}
+
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), registryActorKey{}, actor)))
+		})
+	}
+}
+
+// RegistryActorFromContext returns the authenticated principal.
+func RegistryActorFromContext(ctx context.Context) (domain.Actor, bool) {
+	actor, ok := ctx.Value(registryActorKey{}).(domain.Actor)
+	return actor, ok
 }

@@ -80,10 +80,33 @@ services:
       - JIRA_CONFIG_PATH=/etc/vtx/jira.yaml
       - JIRA_SITE_ID=${JIRA_SITE_ID}
       - GATEWAY_INTERNAL_AUTH_TOKEN=${GATEWAY_INTERNAL_AUTH_TOKEN}
+      # VTX-3 registry actor tokens (one per principal; cmd/api fails closed).
+      # Compose only forwards listed vars, so they must appear here.
+      - REGISTRY_ACTOR_SCHEDULER_TOKEN=${REGISTRY_ACTOR_SCHEDULER_TOKEN}
+      - REGISTRY_ACTOR_ORCHESTRATOR_TOKEN=${REGISTRY_ACTOR_ORCHESTRATOR_TOKEN}
+      - REGISTRY_ACTOR_OPERATOR_TOKEN=${REGISTRY_ACTOR_OPERATOR_TOKEN}
+      - REGISTRY_ACTOR_POLICY_TOKEN=${REGISTRY_ACTOR_POLICY_TOKEN}
+      - REGISTRY_CONSUMER_NAME=${REGISTRY_CONSUMER_NAME:-registry-intake}
     volumes:
       - ./config/jira.yaml:/etc/vtx/jira.yaml:ro
     ports:
       - "${VTX_API_PORT:-49080}:49080"
+
+  registry-worker:
+    build:
+      context: ../../apps/backend
+      dockerfile: Dockerfile
+    command: ["/app/worker", "registry"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgres://vtx_user:vtx_password@postgres:5432/vtx_platform?sslmode=disable
+      - REGISTRY_CONSUMER_NAME=${REGISTRY_CONSUMER_NAME:-registry-intake}
+      # No Temporal vars and no Jira credentials: this process only talks to
+      # PostgreSQL, so a Temporal outage cannot stop registry intake (D8).
 
   gateway:
     image: nginx:stable-alpine

@@ -123,6 +123,19 @@ func main() {
 	if receiptRec != nil {
 		server.WithJiraReceipts(receiptRec)
 	}
+	// VTX-3 registry API. Fail closed: no DB ⇒ no registry routes; missing
+	// actor tokens ⇒ startup error, never an unauthenticated surface.
+	if db != nil {
+		if err := cfg.ValidateRegistry(); err != nil {
+			logger.Error("Invalid registry configuration", "error", err)
+			os.Exit(1)
+		}
+		registryStore := persistence.NewPgRegistryStore(db.Pool, db.Queries)
+		server.WithRegistry(
+			registryStore,
+			application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger),
+		)
+	}
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 
 	httpServer := &http.Server{

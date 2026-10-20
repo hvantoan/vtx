@@ -1,0 +1,35 @@
+# VTX-3 registry migration precheck
+# captured: 2026-10-19T14:00:00
+# target: compose postgres vtx-postgres (localhost:49432/vtx_platform) — dev stack, up 3 days
+
+## goose version
+3
+
+## tables
+agent_sessions
+execution_intents
+goose_db_version
+jira_webhook_inbox
+outbox_events
+task_events
+tasks
+webhook_receipts
+
+## row counts
+tasks=0 task_events=0 agent_sessions=0 execution_intents=1 outbox_events=1 outbox_pending=1
+
+## FKs referencing bootstrap tables
+task_events -> tasks (task_events_task_id_fkey)
+agent_sessions -> tasks (agent_sessions_task_id_fkey)
+
+## outbox_events nullability
+outbox_id uuid NOT NULL
+intent_id uuid NOT NULL
+event_type character varying NOT NULL
+payload jsonb NOT NULL
+published_at timestamp with time zone NULL
+created_at timestamp with time zone NOT NULL
+
+## extensions
+plpgsql
+
