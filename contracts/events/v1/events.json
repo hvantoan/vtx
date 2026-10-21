@@ -1,60 +1,302 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "VTX Platform Events Schema",
-  "description": "Event formats emitted by the VTX platform over SSE and internal message brokers",
-  "version": "1.0.0",
-  "definitions": {
-    "PlatformEvent": {
-      "type": "object",
-      "required": ["id", "type", "timestamp", "source", "data"],
-      "properties": {
-        "id": { "type": "string" },
-        "type": {
-          "type": "string",
-          "enum": [
-            "system.heartbeat",
-            "task.created",
-            "task.started",
-            "task.progress",
-            "task.completed",
-            "worker.status_changed",
-            "execution_intent.created.v1"
-          ]
-        },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "source": { "type": "string" },
-        "data": { "type": "object" }
-      }
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "VTX Platform Events Schema",
+ "description": "Event formats emitted by the VTX platform over SSE and internal message brokers",
+ "version": "1.0.0",
+ "definitions": {
+  "PlatformEvent": {
+   "type": "object",
+   "required": [
+    "id",
+    "type",
+    "timestamp",
+    "source",
+    "data"
+   ],
+   "properties": {
+    "id": {
+     "type": "string"
     },
-    "ExecutionIntentCreatedV1": {
-      "type": "object",
-      "description": "Payload persisted to outbox_events.payload for event_type execution_intent.created.v1 (VTX-2 → VTX-3). changelog_id is the Jira changelog.id — NOT a Jira workflow transition ID. occurred_at is the Jira webhook envelope timestamp normalized to UTC; occurred_at_source records whether it came from the webhook timestamp or fell back to the intake received_at.",
-      "required": [
-        "event_id",
-        "intent_id",
-        "issue_id",
-        "issue_key",
-        "jira_site_id",
-        "changelog_id",
-        "target_status_id",
-        "occurred_at",
-        "correlation_id"
-      ],
-      "properties": {
-        "event_id": { "type": "string", "format": "uuid", "description": "jira_webhook_inbox.event_id" },
-        "intent_id": { "type": "string", "format": "uuid", "description": "execution_intents.intent_id" },
-        "issue_id": { "type": "string", "description": "Authoritative Jira issue.id (re-fetched, never trusted from the payload)" },
-        "issue_key": { "type": "string", "description": "Display key, e.g. VTX-2" },
-        "jira_site_id": { "type": "string" },
-        "changelog_id": { "type": "string", "description": "Jira changelog.id of the accepted status transition" },
-        "target_status_id": { "type": "string", "description": "changelog `to` status ID; always a configured start_status_id" },
-        "occurred_at": { "type": "string", "format": "date-time", "description": "RFC3339 UTC" },
-        "occurred_at_source": {
-          "type": "string",
-          "enum": ["webhook_timestamp", "received_at"]
-        },
-        "correlation_id": { "type": "string" }
-      }
+    "type": {
+     "type": "string",
+     "enum": [
+      "system.heartbeat",
+      "task.created",
+      "task.started",
+      "task.progress",
+      "task.completed",
+      "worker.status_changed",
+      "execution_intent.created.v1",
+      "task_run.created.v1",
+      "task_run.state_changed.v1",
+      "task_run.intent_deferred.v1"
+     ]
+    },
+    "timestamp": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "source": {
+     "type": "string"
+    },
+    "data": {
+     "type": "object"
     }
+   }
+  },
+  "ExecutionIntentCreatedV1": {
+   "type": "object",
+   "description": "Payload persisted to outbox_events.payload for event_type execution_intent.created.v1 (VTX-2 → VTX-3). changelog_id is the Jira changelog.id — NOT a Jira workflow transition ID. occurred_at is the Jira webhook envelope timestamp normalized to UTC; occurred_at_source records whether it came from the webhook timestamp or fell back to the intake received_at.",
+   "required": [
+    "event_id",
+    "intent_id",
+    "issue_id",
+    "issue_key",
+    "jira_site_id",
+    "changelog_id",
+    "target_status_id",
+    "occurred_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "event_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "jira_webhook_inbox.event_id"
+    },
+    "intent_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "execution_intents.intent_id"
+    },
+    "issue_id": {
+     "type": "string",
+     "description": "Authoritative Jira issue.id (re-fetched, never trusted from the payload)"
+    },
+    "issue_key": {
+     "type": "string",
+     "description": "Display key, e.g. VTX-2"
+    },
+    "jira_site_id": {
+     "type": "string"
+    },
+    "changelog_id": {
+     "type": "string",
+     "description": "Jira changelog.id of the accepted status transition"
+    },
+    "target_status_id": {
+     "type": "string",
+     "description": "changelog `to` status ID; always a configured start_status_id"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "RFC3339 UTC"
+    },
+    "occurred_at_source": {
+     "type": "string",
+     "enum": [
+      "webhook_timestamp",
+      "received_at"
+     ]
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "TaskRunCreatedV1": {
+   "type": "object",
+   "description": "Payload persisted to outbox_events.payload for event_type task_run.created.v1 (VTX-3 → VTX-5). Emitted inside the same transaction that admits the run, so it exists if and only if the run exists.",
+   "required": [
+    "run_id",
+    "task_id",
+    "intent_id",
+    "jira_site_id",
+    "jira_issue_id",
+    "issue_key",
+    "state",
+    "version",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "task_runs.run_id"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "registry_tasks.id"
+    },
+    "intent_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "execution_intents.intent_id — also outbox_events.intent_id"
+    },
+    "jira_site_id": {
+     "type": "string"
+    },
+    "jira_issue_id": {
+     "type": "string",
+     "description": "Authoritative Jira issue.id"
+    },
+    "issue_key": {
+     "type": "string",
+     "description": "Display key, e.g. VTX-3"
+    },
+    "state": {
+     "type": "string",
+     "enum": [
+      "queued"
+     ],
+     "description": "Always queued: a run is born queued at version 0"
+    },
+    "version": {
+     "type": "integer",
+     "minimum": 0,
+     "description": "Always 0 for this event"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "RFC3339 UTC"
+    }
+   }
+  },
+  "TaskRunStateChangedV1": {
+   "type": "object",
+   "description": "Payload for event_type task_run.state_changed.v1 (VTX-3 → VTX-5). Emitted in the same transaction as the task_runs update and the audit row, so a published event always has a committed audit record at the same version.",
+   "required": [
+    "run_id",
+    "task_id",
+    "intent_id",
+    "previous_state",
+    "current_state",
+    "action",
+    "actor",
+    "actor_type",
+    "version",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "intent_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "previous_state": {
+     "type": "string",
+     "description": "task_runs.state before the transition"
+    },
+    "current_state": {
+     "type": "string",
+     "description": "task_runs.state after the transition"
+    },
+    "action": {
+     "type": "string",
+     "enum": [
+      "begin",
+      "advance",
+      "complete",
+      "block",
+      "resume",
+      "schedule_retry",
+      "retry_due",
+      "cancel",
+      "fail"
+     ]
+    },
+    "actor": {
+     "type": "string",
+     "enum": [
+      "scheduler",
+      "orchestrator",
+      "operator",
+      "policy"
+     ]
+    },
+    "actor_type": {
+     "type": "string",
+     "enum": [
+      "system",
+      "human"
+     ]
+    },
+    "version": {
+     "type": "integer",
+     "minimum": 1,
+     "description": "task_runs.version after the transition (matches task_run_events.version)"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "TaskRunIntentDeferredV1": {
+   "type": "object",
+   "description": "Payload for event_type task_run.intent_deferred.v1 (VTX-3 → VTX-5). A second intent arrived while the task already had an active run; it is queued FIFO in deferred_intents and no run was created.",
+   "required": [
+    "intent_id",
+    "task_id",
+    "jira_site_id",
+    "jira_issue_id",
+    "issue_key",
+    "disposition",
+    "reason",
+    "received_at"
+   ],
+   "properties": {
+    "intent_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "registry_tasks.id of the task the intent was deferred for"
+    },
+    "jira_site_id": {
+     "type": "string"
+    },
+    "jira_issue_id": {
+     "type": "string"
+    },
+    "issue_key": {
+     "type": "string"
+    },
+    "disposition": {
+     "type": "string",
+     "enum": [
+      "pending_deferred"
+     ]
+    },
+    "reason": {
+     "type": "string",
+     "description": "Why the intent was deferred; currently active_run_in_progress"
+    },
+    "received_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
   }
+ }
 }

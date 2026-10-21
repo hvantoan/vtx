@@ -166,12 +166,238 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/registry/runs/{run_id}:
+    get:
+      summary: Get a task run
+      description: >
+        Returns one task run. Callers authenticate with a registry actor token
+        (scheduler, orchestrator, operator, policy); the actor is derived from
+        the token, never from the request. The registry surface is internal:
+        the production gateway does not proxy it.
+      operationId: getRegistryRun
+      security:
+        - RegistryBearer: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryRun'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+        '404':
+          $ref: '#/components/responses/RegistryNotFound'
+  /api/v1/registry/runs/{run_id}/events:
+    get:
+      summary: List a run's audit events
+      description: >
+        Append-only audit trail in ascending version order. Pagination is a
+        cursor on `version` (never `created_at`): two events may share a
+        timestamp, and the version is the transition's identity.
+      operationId: listRegistryRunEvents
+      security:
+        - RegistryBearer: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/AfterVersion'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RegistryRunEvent'
+                  next_cursor:
+                    type: integer
+                    description: Last version on this page; absent when the page is not full
+                    example: 4
+        '400':
+          $ref: '#/components/responses/RegistryBadRequest'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+  /api/v1/registry/runs/{run_id}/transitions:
+    post:
+      summary: Apply a run transition
+      description: >
+        The only mutation path for a run. The actor comes from the bearer
+        token; a body `actor` that differs from the authenticated principal is
+        rejected with 403 rather than ignored. Errors are typed: not_found 404;
+        stale_version, stale_lease, already_terminal, invalid_transition,
+        conflict_active_run and stage_not_operational 409; forbidden 403.
+        `stage_not_operational` marks a contract-valid hop whose downstream
+        system does not exist yet in phase 1 — the registry refuses instead of
+        forging completion evidence.
+      operationId: transitionRegistryRun
+      security:
+        - RegistryBearer: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, action]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 0
+                  description: Optimistic concurrency token; must equal the current version
+                expected_lease_epoch:
+                  type: integer
+                  minimum: 0
+                  description: Required for lease-guarded actions (begin, advance, complete, schedule_retry)
+                action:
+                  type: string
+                  enum: [begin, advance, complete, block, resume, schedule_retry, retry_due, cancel, fail]
+                reason:
+                  type: string
+                  maxLength: 500
+                  description: Sanitized (whitespace-flattened, bounded) before it reaches the audit row
+                metadata:
+                  type: object
+                  description: Opaque JSON stored on the audit row
+                actor:
+                  type: string
+                  description: >
+                    Accepted only to reject impersonation: if present and not the
+                    authenticated principal, the request is 403.
+            example:
+              expected_version: 0
+              action: block
+              reason: waiting on operator
+      responses:
+        '200':
+          description: The run after the transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryRun'
+        '400':
+          $ref: '#/components/responses/RegistryBadRequest'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+        '403':
+          description: The token's actor may not perform this action, or the body claimed another actor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/RegistryNotFound'
+        '409':
+          description: >
+            Conflict: stale_version, stale_lease, already_terminal,
+            invalid_transition, conflict_active_run or stage_not_operational.
+            Nothing is written when this is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/registry/tasks/{site_id}/{issue_id}:
+    get:
+      summary: Get a registry task by Jira identity
+      description: Resolves (jira_site_id, jira_issue_id) to the registry task.
+      operationId: getRegistryTask
+      security:
+        - RegistryBearer: []
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/IssueId'
+      responses:
+        '200':
+          description: The task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryTask'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+        '404':
+          $ref: '#/components/responses/RegistryNotFound'
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT or API Token
+    RegistryBearer:
+      type: http
+      scheme: bearer
+      description: >
+        One of the four registry actor tokens. The actor (scheduler,
+        orchestrator, operator, policy) is derived from the token, never from
+        the request body.
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AfterVersion:
+      name: after_version
+      in: query
+      required: false
+      description: Exclusive cursor; only events with version greater than this are returned.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    SiteId:
+      name: site_id
+      in: path
+      required: true
+      description: Jira site ID (e.g. vtxsolution.atlassian.net)
+      schema:
+        type: string
+    IssueId:
+      name: issue_id
+      in: path
+      required: true
+      description: Authoritative Jira issue.id, not the issue key
+      schema:
+        type: string
+  responses:
+    RegistryBadRequest:
+      description: Malformed request (invalid JSON, unknown action, bad cursor)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RegistryUnauthorized:
+      description: Missing or unknown registry actor token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RegistryNotFound:
+      description: Registry resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
     HealthResponse:
       type: object
@@ -361,3 +587,141 @@ components:
           format: uuid
           description: Present for accepted and duplicate dispositions
           example: 3f6a2c94-0d1b-4e58-9a7c-12df34ab56cd
+    RegistryTask:
+      type: object
+      required:
+        - task_id
+        - jira_site_id
+        - jira_issue_id
+        - jira_issue_key
+        - project_key
+        - created_at
+        - updated_at
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        jira_site_id:
+          type: string
+        jira_issue_id:
+          type: string
+        jira_issue_key:
+          type: string
+          example: VTX-3
+        project_key:
+          type: string
+          example: VTX
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RegistryRun:
+      type: object
+      required:
+        - run_id
+        - task_id
+        - state
+        - version
+        - attempt
+        - lease_epoch
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+            - queued
+            - preparing
+            - coding
+            - verifying
+            - qa
+            - quality_gate
+            - pr_draft
+            - completed
+            - blocked
+            - retry_wait
+            - failed
+            - cancelled
+        version:
+          type: integer
+          format: int64
+          description: Optimistic concurrency token
+        attempt:
+          type: integer
+        resume_state:
+          type:
+            - string
+            - "null"
+        retry_due_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        commit_sha:
+          type: string
+        branch:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        lease_owner:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+        lease_expires_at:
+          type: string
+          format: date-time
+        correlation_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    RegistryRunEvent:
+      type: object
+      required:
+        - previous_state
+        - current_state
+        - action
+        - actor
+        - actor_type
+        - version
+        - created_at
+      properties:
+        previous_state:
+          type: string
+          description: Empty string on the version-0 creation row
+        current_state:
+          type: string
+        action:
+          type: string
+        actor:
+          type: string
+        actor_type:
+          type: string
+          enum: [system, human]
+        version:
+          type: integer
+          format: int64
+          description: Audit version; equals the run version after the transition
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time

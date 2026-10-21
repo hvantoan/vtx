@@ -181,9 +181,18 @@ type InsertOutboxEventParams struct {
 	Payload   []byte      `json:"payload"`
 }
 
-func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (OutboxEvent, error) {
+type InsertOutboxEventRow struct {
+	OutboxID    pgtype.UUID        `json:"outbox_id"`
+	IntentID    pgtype.UUID        `json:"intent_id"`
+	EventType   string             `json:"event_type"`
+	Payload     []byte             `json:"payload"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error) {
 	row := q.db.QueryRow(ctx, insertOutboxEvent, arg.IntentID, arg.EventType, arg.Payload)
-	var i OutboxEvent
+	var i InsertOutboxEventRow
 	err := row.Scan(
 		&i.OutboxID,
 		&i.IntentID,

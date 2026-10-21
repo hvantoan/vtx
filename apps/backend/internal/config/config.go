@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vtx/platform/internal/domain"
 )
 
 type Config struct {
@@ -34,6 +36,16 @@ type Config struct {
 	JiraProjects             map[string]JiraProjectConfig
 	JiraSiteID               string
 	GatewayInternalAuthToken string
+
+	// RegistryConsumerName is the delivery identity of the VTX-3 outbox
+	// dispatcher (all its replicas). Actor tokens own the HTTP API surface; the
+	// dispatcher authenticates as this consumer, not as an actor.
+	RegistryConsumerName string
+
+	// RegistryActorTokens binds each authenticated principal to its own bearer
+	// token (D5). The actor a request acts as comes from here — never from the
+	// request body.
+	RegistryActorTokens map[domain.Actor]string
 
 	// Legacy env fallback inputs — read in Load(), consumed by
 	// loadJiraIntake(), never read by downstream code.
@@ -66,6 +78,16 @@ func Load() *Config {
 		JiraLegacyReadyStatus:    getEnv("JIRA_READY_TO_DEV_STATUS_ID", ""),
 		JiraSiteID:               getEnv("JIRA_SITE_ID", ""),
 		GatewayInternalAuthToken: getEnv("GATEWAY_INTERNAL_AUTH_TOKEN", ""),
+
+		// VTX-3 registry intake. The consumer name is the delivery identity
+		// that owns outbox ACKs; all replicas of the dispatcher share it.
+		RegistryConsumerName: getEnv("REGISTRY_CONSUMER_NAME", "registry-intake"),
+		RegistryActorTokens: map[domain.Actor]string{
+			domain.ActorScheduler:    getEnv("REGISTRY_ACTOR_SCHEDULER_TOKEN", ""),
+			domain.ActorOrchestrator: getEnv("REGISTRY_ACTOR_ORCHESTRATOR_TOKEN", ""),
+			domain.ActorOperator:     getEnv("REGISTRY_ACTOR_OPERATOR_TOKEN", ""),
+			domain.ActorPolicy:       getEnv("REGISTRY_ACTOR_POLICY_TOKEN", ""),
+		},
 	}
 	c.loadJiraIntake()
 	return c

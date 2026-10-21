@@ -69,6 +69,13 @@ test-backend:
 	@echo "🧪 Running Go unit tests..."
 	@go -C $(BACKEND_DIR) test -v -race ./...
 
+# Integration tests own the database they are pointed at (goose up/down/up +
+# seeded VTX-2 rows) — always pass a throwaway DSN.
+test-integration:
+	@test -n "$(TEST_DATABASE_URL)" || { echo "❌ TEST_DATABASE_URL is required (throwaway DB)"; exit 1; }
+	@echo "🧪 Running Go integration tests against real Postgres..."
+	@TEST_DATABASE_URL="$(TEST_DATABASE_URL)" go -C $(BACKEND_DIR) test -tags integration -race -p 1 ./...
+
 test-agent:
 	@echo "🧪 Running Agent runtime tests..."
 	@pnpm --filter @vtx/agent-runtime test

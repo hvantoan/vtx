@@ -2,9 +2,9 @@ name: VTX CI Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
   merge_group:
 
 concurrency:
@@ -181,6 +181,10 @@ jobs:
           JIRA_API_TOKEN=ci-token
           JIRA_SITE_ID=vtxsolution.atlassian.net
           GATEWAY_INTERNAL_AUTH_TOKEN=ci-internal-gateway-token-0000000000000000
+          REGISTRY_ACTOR_SCHEDULER_TOKEN=ci-registry-scheduler-token-000000000000000
+          REGISTRY_ACTOR_ORCHESTRATOR_TOKEN=ci-registry-orchestrator-token-00000000000
+          REGISTRY_ACTOR_OPERATOR_TOKEN=ci-registry-operator-token-00000000000000000
+          REGISTRY_ACTOR_POLICY_TOKEN=ci-registry-policy-token-0000000000000000000
           WEBHOOK_PATH_SECRET_PRIMARY=cisecretprimary00000000000000000000000000000000000
           WEBHOOK_PATH_SECRET_SECONDARY=
           # Host ports are bound ephemerally (0): fixed ports in the
@@ -231,8 +235,26 @@ jobs:
           cd apps/backend && sqlc generate
           git diff --exit-code internal/persistence/db
 
+      - name: Registry precheck + integration tests (TR-11/18/24, I-01..I-05)
+        run: |
+          DSN="postgres://vtx_user:vtx_password@localhost:${JT_PG_PORT}/vtx_platform?sslmode=disable"
+          mkdir -p tests/evidence
+          {
+            echo "# VTX-3 registry migration precheck"
+            echo "# sha: ${GITHUB_SHA}  $(date -Is)"
+            psql "$DSN" -X -c "SELECT version_id FROM goose_db_version ORDER BY version_id DESC LIMIT 1"
+            psql "$DSN" -X -c "SELECT 'tasks='||(SELECT count(*) FROM tasks)||' task_events='||(SELECT count(*) FROM task_events)||' agent_sessions='||(SELECT count(*) FROM agent_sessions)||' execution_intents='||(SELECT count(*) FROM execution_intents)||' outbox_events='||(SELECT count(*) FROM outbox_events)||' outbox_pending='||(SELECT count(*) FROM outbox_events WHERE published_at IS NULL)"
+            psql "$DSN" -X -c "SELECT conrelid::regclass||' -> '||confrelid::regclass AS fk_into_bootstrap FROM pg_constraint WHERE contype='f' AND confrelid::regclass::text IN ('tasks','task_events','agent_sessions')"
+          } | tee tests/evidence/registry-migration-precheck.log
+          # The suite runs goose down-to 0 / up-to 3 / up and seeds VTX-2 rows;
+          # it ends with the schema at head, so the JT harness below is unaffected.
+          TEST_DATABASE_URL="$DSN" make test-integration | tee tests/evidence/registry-integration.log
+
       - name: JT-01..21 harness (20 concurrent × 2 replicas, real nginx)
         run: ./infra/scripts/test-jira-webhook.sh | tee jt-evidence.log
+
+      - name: VTX-3 registry outbox harness (dispatcher replicas, DLQ, backfill)
+        run: ./infra/scripts/test-registry-outbox.sh | tee registry-outbox-evidence.log
 
       - name: Render prod overlay — backend must have no ports (JT-16 evidence)
         run: |
@@ -257,6 +279,19 @@ jobs:
           path: |
             jt-evidence.log
             prod-compose-render.yml
+          if-no-files-found: warn
+
+      - name: Upload VTX-3 registry evidence (SHA-stamped)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-evidence-${{ github.sha }}
+          path: |
+            registry-outbox-evidence.log
+            tests/evidence/registry-migration-precheck.log
+            tests/evidence/registry-integration.log
+            tests/evidence/vtx-3-compatibility-matrix.md
+            tests/evidence/vtx-3-tr-matrix.md
           if-no-files-found: warn
 
   gate:

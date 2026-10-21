@@ -32,6 +32,9 @@ type Server struct {
 	sseMu        sync.RWMutex
 	jiraWebhook  JiraWebhookProcessor
 	jiraReceipts ReceiptRecorder
+	// VTX-3 registry surface. Nil until WithRegistry is called.
+	registryReader      RegistryReader
+	registryTransitions RegistryTransitioner
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {

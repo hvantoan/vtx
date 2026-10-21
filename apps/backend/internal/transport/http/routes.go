@@ -51,6 +51,18 @@ func (s *Server) Routes() http.Handler {
 			r.Use(GatewayAuthMiddleware(s.cfg.GatewayInternalAuthToken))
 			r.Post("/integrations/jira/webhooks", s.HandleJiraWebhook)
 		})
+		// VTX-3 registry surface. Actor comes from the bearer token (D5), and
+		// the group is separate from both the dashboard token and the gateway
+		// token: neither opens a registry mutation.
+		if s.registryReader != nil && s.registryTransitions != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(RegistryActorMiddleware(s.cfg.RegistryActorTokens))
+				r.Get("/registry/runs/{run_id}", s.HandleRegistryGetRun)
+				r.Get("/registry/runs/{run_id}/events", s.HandleRegistryListEvents)
+				r.Post("/registry/runs/{run_id}/transitions", s.HandleRegistryTransition)
+				r.Get("/registry/tasks/{site_id}/{issue_id}", s.HandleRegistryGetTask)
+			})
+		}
 	})
 
 	return r

@@ -18,6 +18,14 @@ type AgentSession struct {
 	EndedAt   pgtype.Timestamptz `json:"ended_at"`
 }
 
+type DeferredIntent struct {
+	IntentID    pgtype.UUID        `json:"intent_id"`
+	TaskID      pgtype.UUID        `json:"task_id"`
+	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
+	Disposition string             `json:"disposition"`
+	Reason      pgtype.Text        `json:"reason"`
+}
+
 type ExecutionIntent struct {
 	IntentID       pgtype.UUID        `json:"intent_id"`
 	Source         string             `json:"source"`
@@ -26,6 +34,13 @@ type ExecutionIntent struct {
 	Status         string             `json:"status"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type InboxConsumption struct {
+	ConsumerName  string             `json:"consumer_name"`
+	SourceEventID pgtype.UUID        `json:"source_event_id"`
+	RunID         pgtype.UUID        `json:"run_id"`
+	ConsumedAt    pgtype.Timestamptz `json:"consumed_at"`
 }
 
 type JiraWebhookInbox struct {
@@ -46,12 +61,29 @@ type JiraWebhookInbox struct {
 }
 
 type OutboxEvent struct {
-	OutboxID    pgtype.UUID        `json:"outbox_id"`
-	IntentID    pgtype.UUID        `json:"intent_id"`
-	EventType   string             `json:"event_type"`
-	Payload     []byte             `json:"payload"`
-	PublishedAt pgtype.Timestamptz `json:"published_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	OutboxID         pgtype.UUID        `json:"outbox_id"`
+	IntentID         pgtype.UUID        `json:"intent_id"`
+	EventType        string             `json:"event_type"`
+	Payload          []byte             `json:"payload"`
+	PublishedAt      pgtype.Timestamptz `json:"published_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ClaimedBy        pgtype.Text        `json:"claimed_by"`
+	ClaimedUntil     pgtype.Timestamptz `json:"claimed_until"`
+	Attempt          int32              `json:"attempt"`
+	NextAttemptAt    pgtype.Timestamptz `json:"next_attempt_at"`
+	DeadLetteredAt   pgtype.Timestamptz `json:"dead_lettered_at"`
+	DeadLetterReason pgtype.Text        `json:"dead_letter_reason"`
+}
+
+type RegistryTask struct {
+	ID           pgtype.UUID        `json:"id"`
+	JiraSiteID   string             `json:"jira_site_id"`
+	JiraIssueID  string             `json:"jira_issue_id"`
+	JiraIssueKey string             `json:"jira_issue_key"`
+	ProjectKey   string             `json:"project_key"`
+	Version      int64              `json:"version"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Task struct {
@@ -71,6 +103,45 @@ type TaskEvent struct {
 	EventType string             `json:"event_type"`
 	Payload   string             `json:"payload"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type TaskRun struct {
+	RunID          pgtype.UUID        `json:"run_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	IntentID       pgtype.UUID        `json:"intent_id"`
+	CorrelationID  pgtype.Text        `json:"correlation_id"`
+	OriginEventID  pgtype.UUID        `json:"origin_event_id"`
+	ChangelogID    pgtype.Text        `json:"changelog_id"`
+	State          string             `json:"state"`
+	Version        int64              `json:"version"`
+	Attempt        int32              `json:"attempt"`
+	ResumeState    pgtype.Text        `json:"resume_state"`
+	RetryDueAt     pgtype.Timestamptz `json:"retry_due_at"`
+	CommitSha      pgtype.Text        `json:"commit_sha"`
+	Branch         pgtype.Text        `json:"branch"`
+	ErrorCode      pgtype.Text        `json:"error_code"`
+	ErrorMessage   pgtype.Text        `json:"error_message"`
+	LeaseOwner     pgtype.Text        `json:"lease_owner"`
+	LeaseEpoch     int64              `json:"lease_epoch"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+}
+
+type TaskRunEvent struct {
+	EventID       pgtype.UUID        `json:"event_id"`
+	RunID         pgtype.UUID        `json:"run_id"`
+	PreviousState string             `json:"previous_state"`
+	CurrentState  string             `json:"current_state"`
+	Action        string             `json:"action"`
+	Actor         string             `json:"actor"`
+	ActorType     string             `json:"actor_type"`
+	CorrelationID pgtype.Text        `json:"correlation_id"`
+	Version       int64              `json:"version"`
+	Metadata      []byte             `json:"metadata"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 type WebhookReceipt struct {

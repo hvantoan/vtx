@@ -89,6 +89,20 @@ else
     echo "  ✅ Check 6: Secret scan passed (no high-entropy API tokens or private keys found)."
 fi
 
+# 7. VTX-3 registry layers must not reach into orchestration, Git, or Docker
+# (SPEC-AUTO-02 §1/TR-16). Package-level check: the binary may import Temporal
+# for the API server, but the registry code paths may not.
+REGISTRY_PKGS=("./internal/domain" "./internal/application" "./internal/transport/http" "./internal/persistence")
+REGISTRY_DEPS=$(go -C apps/backend list -deps "${REGISTRY_PKGS[@]}" 2>/dev/null \
+    | grep -E 'go\.temporal\.io|github\.com/go-git|github\.com/docker|internal/orchestration' || true)
+if [ -n "$REGISTRY_DEPS" ]; then
+    echo "❌ VIOLATION: registry layers depend on forbidden packages:"
+    echo "$REGISTRY_DEPS"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "  ✅ Check 7: Registry layers are free of Temporal, Git, Docker and orchestration deps."
+fi
+
 if [ "$ERRORS" -gt 0 ]; then
     echo "❌ Monorepo boundary check FAILED with $ERRORS violation(s)."
     exit 1
