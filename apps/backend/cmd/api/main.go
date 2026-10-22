@@ -13,6 +13,7 @@ import (
 
 	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/config"
+	"github.com/vtx/platform/internal/gitops"
 	"github.com/vtx/platform/internal/integrations/jira"
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
@@ -135,6 +136,23 @@ func main() {
 			registryStore,
 			application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger),
 		)
+		// VTX-4 worktree surface. The API process owns HTTP reads/writes only;
+		// the periodic reconcile lives in the Temporal worker.
+		server.WithWorktree(application.NewWorktreeService(
+			persistence.NewPgWorktreeStore(db.Pool, db.Queries),
+			gitops.Runner{
+				Git: gitops.Git{},
+				Layout: gitops.Layout{
+					WorktreeRoot:   cfg.WorktreeRoot,
+					QuarantineRoot: cfg.WorktreeQuarantineRoot,
+					RepoCacheRoot:  cfg.RepoCacheRoot,
+				},
+			},
+			cfg.WorktreeOwner,
+			cfg.WorktreeLeaseTTL,
+			application.SystemClock{},
+			logger,
+		))
 	}
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 

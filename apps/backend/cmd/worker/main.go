@@ -21,10 +21,45 @@ import (
 
 	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/config"
+	"github.com/vtx/platform/internal/gitops"
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
 	"github.com/vtx/platform/internal/persistence"
 )
+
+// reconcileScheduleID is the stable schedule identity: creating it twice is a
+// no-op so every worker replica can attempt registration safely.
+const reconcileScheduleID = "vtx-worktree-reconcile"
+
+// ensureReconcileSchedule creates the periodic reconcile schedule once. The
+// schedule fires WorktreeReconcileWorkflow on the task queue; workflow history
+// gives reconcile passes durability and retry for free.
+func ensureReconcileSchedule(ctx context.Context, c client.Client, cfg *config.Config, logger *slog.Logger) {
+	schedClient := c.ScheduleClient()
+	handle := schedClient.GetHandle(ctx, reconcileScheduleID)
+	if _, err := handle.Describe(ctx); err == nil {
+		return // already exists
+	}
+	_, err := schedClient.Create(ctx, client.ScheduleOptions{
+		ID: reconcileScheduleID,
+		Spec: client.ScheduleSpec{
+			Intervals: []client.ScheduleIntervalSpec{{Every: cfg.WorktreeReconcileEvery}},
+		},
+		Action: &client.ScheduleWorkflowAction{
+			ID:        "vtx-worktree-reconcile-run",
+			Workflow:  orchestration.WorktreeReconcileWorkflow,
+			TaskQueue: cfg.TemporalQueue,
+		},
+	})
+	if err != nil {
+		logger.Error("worktree reconcile schedule create failed", "error", err)
+		return
+	}
+	logger.Info("worktree reconcile schedule registered",
+		slog.String("schedule_id", reconcileScheduleID),
+		slog.Duration("interval", cfg.WorktreeReconcileEvery),
+	)
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "registry" {
@@ -58,6 +93,57 @@ func runTemporalWorker() {
 	// Register workflows and activities
 	w.RegisterWorkflow(orchestration.SampleWorkflow)
 	w.RegisterActivity(orchestration.SampleActivity)
+
+	// VTX-4: worktree lifecycle needs the DB for its durable rows and the git
+	// runner for the disk side. The worker connects lazily-but-once here; a
+	// DB outage makes activity calls fail, which Temporal retries.
+	ctx := context.Background()
+	database, dbErr := persistence.NewDatabase(ctx, cfg)
+	if dbErr != nil {
+		logger.Error("worktree store unavailable; VTX-4 activities disabled", "error", dbErr)
+	} else {
+		defer database.Close()
+		gitRunner := gitops.Runner{
+			Git: gitops.Git{},
+			Layout: gitops.Layout{
+				WorktreeRoot:   cfg.WorktreeRoot,
+				QuarantineRoot: cfg.WorktreeQuarantineRoot,
+				RepoCacheRoot:  cfg.RepoCacheRoot,
+			},
+		}
+		worktreeSvc := application.NewWorktreeService(
+			persistence.NewPgWorktreeStore(database.Pool, database.Queries),
+			gitRunner,
+			cfg.WorktreeOwner,
+			cfg.WorktreeLeaseTTL,
+			application.SystemClock{},
+			logger,
+		)
+		acts := orchestration.NewWorktreeActivities(worktreeSvc)
+		w.RegisterActivity(acts)
+		w.RegisterWorkflow(orchestration.WorktreeReconcileWorkflow)
+
+		// Boot sweep (advise decision 4a): crash-orphans and expired leases
+		// left by the previous process are reclaimed before new work starts.
+		go func() {
+			rep, err := worktreeSvc.Reconcile(context.Background())
+			if err != nil {
+				logger.Error("worktree boot reconcile failed", "error", err)
+				return
+			}
+			logger.Info("worktree boot reconcile",
+				"released", rep.Released,
+				"quarantined", rep.Quarantined,
+				"orphans_quarantined", rep.OrphansQuarantined,
+				"errors", len(rep.Errors),
+			)
+		}()
+
+		// Periodic reconcile via a Temporal schedule (advise decision 4b):
+		// lease expiry happens when OTHER workers die, so a boot sweep alone
+		// is not enough. The schedule is idempotent — already-exists is fine.
+		ensureReconcileSchedule(ctx, c, cfg, logger)
+	}
 
 	logger.Info("Temporal worker registered workflows and activities. Starting...")
 

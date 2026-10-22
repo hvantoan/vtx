@@ -3,19 +3,22 @@
 -- outbound event either all commit or none do (TR-17/TR-25).
 
 -- name: UpsertRegistryTask :one
--- Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key
--- are mutable metadata; the identity and task version are not touched here.
+-- Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key/
+-- repo_url are mutable metadata; the identity and task version are not touched.
+-- repo_url (VTX-4) is COALESCEd: a caller that does not know the repo yet must
+-- not erase one a previous delivery recorded.
 INSERT INTO registry_tasks (
-    jira_site_id, jira_issue_id, jira_issue_key, project_key
+    jira_site_id, jira_issue_id, jira_issue_key, project_key, repo_url
 ) VALUES (
-    $1, $2, $3, $4
+    $1, $2, $3, $4, $5
 )
 ON CONFLICT (jira_site_id, jira_issue_id) DO UPDATE
 SET jira_issue_key = EXCLUDED.jira_issue_key,
     project_key = EXCLUDED.project_key,
+    repo_url = COALESCE(EXCLUDED.repo_url, registry_tasks.repo_url),
     updated_at = CURRENT_TIMESTAMP
 RETURNING id, jira_site_id, jira_issue_id, jira_issue_key, project_key,
-    version, created_at, updated_at;
+    version, repo_url, created_at, updated_at;
 
 -- name: LockExecutionIntent :one
 -- Serialize deliveries that refer to the same intent, even when they carry

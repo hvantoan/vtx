@@ -63,6 +63,17 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/registry/tasks/{site_id}/{issue_id}", s.HandleRegistryGetTask)
 			})
 		}
+		// VTX-4 worktree surface. Same actor tokens as the registry — the
+		// scheduler (VTX-5) is the expected mutation caller.
+		if s.worktree != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(RegistryActorMiddleware(s.cfg.RegistryActorTokens))
+				r.Post("/worktrees/allocate", s.HandleWorktreeAllocate)
+				r.Get("/worktrees", s.HandleWorktreeListAllocated)
+				r.Get("/worktrees/runs/{run_id}", s.HandleWorktreeGet)
+				r.Post("/worktrees/runs/{run_id}/release", s.HandleWorktreeRelease)
+			})
+		}
 	})
 
 	return r

@@ -47,6 +47,17 @@ type Config struct {
 	// request body.
 	RegistryActorTokens map[domain.Actor]string
 
+	// VTX-4 worktree lifecycle. The three roots are the canonical layout the
+	// service proves every fs path against; nothing outside them is touched.
+	WorktreeRoot           string
+	WorktreeQuarantineRoot string
+	RepoCacheRoot          string
+	WorktreeLeaseTTL       time.Duration
+	WorktreeReconcileEvery time.Duration
+	// WorktreeOwner is the lease_owner identity this process writes to
+	// task_runs (e.g. "worker-1", "scheduler"). Empty → service default.
+	WorktreeOwner string
+
 	// Legacy env fallback inputs — read in Load(), consumed by
 	// loadJiraIntake(), never read by downstream code.
 	JiraProjectAllowlist  []string
@@ -82,6 +93,14 @@ func Load() *Config {
 		// VTX-3 registry intake. The consumer name is the delivery identity
 		// that owns outbox ACKs; all replicas of the dispatcher share it.
 		RegistryConsumerName: getEnv("REGISTRY_CONSUMER_NAME", "registry-intake"),
+
+		// VTX-4 worktree lifecycle.
+		WorktreeRoot:           getEnv("WORKTREE_ROOT", "./var/worktrees"),
+		WorktreeQuarantineRoot: getEnv("WORKTREE_QUARANTINE_ROOT", "./var/worktrees-quarantine"),
+		RepoCacheRoot:          getEnv("REPO_CACHE_ROOT", "./var/repo-cache"),
+		WorktreeLeaseTTL:       getEnvAsDuration("WORKTREE_LEASE_TTL", 2*time.Minute),
+		WorktreeReconcileEvery: getEnvAsDuration("WORKTREE_RECONCILE_INTERVAL", 5*time.Minute),
+		WorktreeOwner:          getEnv("WORKTREE_OWNER", ""),
 		RegistryActorTokens: map[domain.Actor]string{
 			domain.ActorScheduler:    getEnv("REGISTRY_ACTOR_SCHEDULER_TOKEN", ""),
 			domain.ActorOrchestrator: getEnv("REGISTRY_ACTOR_ORCHESTRATOR_TOKEN", ""),

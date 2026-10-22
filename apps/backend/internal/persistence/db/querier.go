@@ -11,6 +11,14 @@ import (
 )
 
 type Querier interface {
+	// VTX-4 worktree lifecycle queries. Mutations run inside the single pgx.Tx
+	// owned by WorktreeStore so lease acquisition, worktree row, and run branch
+	// commit or roll back together — same boundary discipline as the registry.
+	// Writes the VTX-3 lease columns (they had no writer before VTX-4). Called
+	// only on a row already locked FOR UPDATE by the caller's tx. The epoch bump
+	// invalidates every previously observed epoch — that is the fencing token
+	// stale holders get rejected on.
+	AcquireRunLease(ctx context.Context, arg AcquireRunLeaseParams) (AcquireRunLeaseRow, error)
 	// VTX-3 outbox dispatcher queries (§0.E: exactly ONE consumer identity, N
 	// replicas — SKIP LOCKED spreads work, `claimed_by` never hides work from a
 	// sibling). `published_at` is the consumer-specific ACK: it is stamped by the
@@ -28,14 +36,21 @@ type Querier interface {
 	// Retention: terminal noise receipts age out; accepted/duplicate rows and
 	// inbox rows are kept as the dedup/audit record.
 	DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error)
+	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
-	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (RegistryTask, error)
+	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
+	// Lightweight lease read for fencing checks that do not need the whole row.
+	GetRunLeaseState(ctx context.Context, runID pgtype.UUID) (GetRunLeaseStateRow, error)
+	// Allocation input: the run's task identity fields plus its repo_url (nullable
+	// for tasks created before VTX-4 or before a repo was recorded).
+	GetRunTaskRepo(ctx context.Context, runID pgtype.UUID) (GetRunTaskRepoRow, error)
 	GetTask(ctx context.Context, id string) (Task, error)
 	GetTaskRun(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
 	// The row lock that makes the §0.D error ordering deterministic: the first
 	// committer wins, every other writer blocks here, then reads the NEW version
 	// and is classified as stale_version.
 	GetTaskRunForUpdate(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
+	GetWorktreeByRun(ctx context.Context, runID pgtype.UUID) (Worktree, error)
 	// I-03 read side: the partial unique index is the enforcement, this is the
 	// branch selector for admit-vs-defer.
 	HasActiveRunForTask(ctx context.Context, taskID pgtype.UUID) (bool, error)
@@ -63,10 +78,16 @@ type Querier interface {
 	// AFTER processing settles (best-effort, outside the acceptance tx) — a
 	// failure here logs an error and never changes the HTTP response.
 	InsertWebhookReceipt(ctx context.Context, arg InsertWebhookReceiptParams) (pgtype.UUID, error)
+	// The run_id UNIQUE is the same-run idempotency key. A race that loses the
+	// INSERT then reads the winner's row via GetWorktreeByRun.
+	InsertWorktree(ctx context.Context, arg InsertWorktreeParams) (Worktree, error)
 	// The receipt is written first (it is the dedup gate, before we know whether a
 	// run is admitted); this links it to the run once the run exists, so the audit
 	// trail can answer "which run did this event create" without a payload join.
 	LinkInboxConsumptionToRun(ctx context.Context, arg LinkInboxConsumptionToRunParams) error
+	// Reconcile read: every allocated row joined to its run so the caller can see
+	// terminal runs and expired leases without a second query.
+	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
 	// FIFO order is the contract for the admission path (VTX-5).
 	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
@@ -81,14 +102,29 @@ type Querier interface {
 	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
 	// second ACK for the same event reports 0 rows.
 	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)
+	// Guarded transition: 0 rows means the worktree already moved on (a
+	// reconciler raced a release) and the caller must re-read.
+	MarkWorktreeStatus(ctx context.Context, arg MarkWorktreeStatusParams) (Worktree, error)
 	// Dead letter: unsupported event_type, schema-invalid payload or exhausted
 	// retries. The row is kept (audit) and excluded from claim until redrive.
 	QuarantineOutboxEvent(ctx context.Context, arg QuarantineOutboxEventParams) (int64, error)
 	// Operator action: clear the DLQ marker and let the dispatcher try again.
 	RedriveOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
+	// Idempotent release: owner+epoch match required, so a stale owner can never
+	// clear a fresher lease.
+	ReleaseRunLease(ctx context.Context, arg ReleaseRunLeaseParams) error
+	// Only the recorded owner holding the presented epoch may renew. 0 rows ⇒
+	// caller treats it as a lost lease (stale epoch).
+	RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error)
 	// Bounded retry: bump attempt, back off, release the claim so a sibling
 	// replica can pick the event up again.
 	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) (int64, error)
+	// Allocation-time repo binding: the scheduler passes repo_url and the first
+	// allocation records it on the task. Later allocations reuse the stored value.
+	SetRegistryTaskRepoURL(ctx context.Context, arg SetRegistryTaskRepoURLParams) error
+	// The allocated branch is persisted on the VTX-3 run row — VTX-4 does not
+	// duplicate it into a new run-level column.
+	SetRunBranch(ctx context.Context, arg SetRunBranchParams) error
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.
 	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
 	// CAS on version. Called only after GetTaskRunForUpdate; `WHERE version = $10`
@@ -98,9 +134,11 @@ type Querier interface {
 	// VTX-3 registry queries. Every mutation runs inside the single pgx.Tx opened
 	// by the application service (queries.WithTx), so claim → transition → audit →
 	// outbound event either all commit or none do (TR-17/TR-25).
-	// Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key
-	// are mutable metadata; the identity and task version are not touched here.
-	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (RegistryTask, error)
+	// Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key/
+	// repo_url are mutable metadata; the identity and task version are not touched.
+	// repo_url (VTX-4) is COALESCEd: a caller that does not know the repo yet must
+	// not erase one a previous delivery recorded.
+	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

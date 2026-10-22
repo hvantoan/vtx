@@ -177,6 +177,9 @@ func (s *PgRegistryStore) ConsumeIntent(
 		JiraIssueID:  plan.Task.JiraIssueID,
 		JiraIssueKey: plan.Task.JiraIssueKey,
 		ProjectKey:   plan.Task.ProjectKey,
+		// Intake does not carry a repo (VTX-2 payload); NULL keeps any value a
+		// previous allocation recorded via the COALESCE in the upsert.
+		RepoUrl: pgtype.Text{},
 	})
 	if err != nil {
 		return application.ConsumeOutcome{}, fmt.Errorf("upsert task: %w", err)
