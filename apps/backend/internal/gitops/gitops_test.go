@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -165,6 +166,71 @@ func TestGitLifecycle_RealRepo(t *testing.T) {
 	}
 	if strings.Contains(out, wtPath) {
 		t.Fatalf("stale worktree entry for %s in:\n%s", wtPath, out)
+	}
+}
+
+// Two callers sharing one cache root must serialize on the repo-key flock:
+// all succeed, the result is a single healthy clone, and nothing but the
+// cache dir and the .locks dir is left in RepoCacheRoot. Uses real git —
+// skipped when unavailable.
+func TestEnsureRepoCache_ConcurrentCallers(t *testing.T) {
+	if _, err := execLookPath(); err != nil {
+		t.Skip("git not on PATH")
+	}
+	ctx := context.Background()
+	src := t.TempDir()
+	g := Git{}
+	must := func(dir string, args ...string) {
+		if _, err := g.run(ctx, dir, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	must(src, "init", "-b", "main")
+	must(src, "config", "user.email", "t@t")
+	must(src, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	must(src, "add", ".")
+	must(src, "commit", "-m", "init")
+
+	layout := Layout{
+		WorktreeRoot:   filepath.Join(t.TempDir(), "wt"),
+		QuarantineRoot: filepath.Join(t.TempDir(), "q"),
+		RepoCacheRoot:  filepath.Join(t.TempDir(), "cache"),
+	}
+
+	const n = 4
+	var wg sync.WaitGroup
+	dirs := make([]string, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			dirs[i], errs[i] = g.EnsureRepoCache(ctx, layout, src)
+		}(i)
+	}
+	wg.Wait()
+	for i := range errs {
+		if errs[i] != nil {
+			t.Fatalf("caller %d: %v", i, errs[i])
+		}
+		if dirs[i] != dirs[0] {
+			t.Fatalf("caller %d dir = %s, want %s", i, dirs[i], dirs[0])
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], ".git")); err != nil {
+		t.Fatalf("cache missing .git: %v", err)
+	}
+	entries, err := os.ReadDir(layout.RepoCacheRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != filepath.Base(dirs[0]) && e.Name() != ".locks" {
+			t.Fatalf("unexpected entry in cache root: %s", e.Name())
+		}
 	}
 }
 

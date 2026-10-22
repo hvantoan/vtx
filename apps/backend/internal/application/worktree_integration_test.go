@@ -267,17 +267,18 @@ func TestWorktreeRelease_DirtyQuarantinedCleanRemoved(t *testing.T) {
 	}
 }
 
-func TestWorktreeReconcile_ExpiredLeaseAndOrphan(t *testing.T) {
+func TestWorktreeReconcile_TerminalRunAndOrphan(t *testing.T) {
 	h := newWorktreeHarness(t)
 	_, runID := h.seedTaskAndRun("preparing")
 	alloc, err := h.svc.AllocateWorktree(context.Background(), application.AllocateCommand{RunID: runID})
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
-	// Force the lease into the past — the worker died; the reconcile must
-	// reclaim the worktree even though the run is still nonterminal.
+	// Terminal runs are always reclaimable. Expired leases on NON-terminal
+	// runs are not reclaimed until VTX-7 arms ReclaimExpiredLeases — with no
+	// renewal caller every live lease expires one TTL after allocation.
 	if _, err := h.pool.Exec(context.Background(),
-		`UPDATE task_runs SET lease_expires_at = now() - interval '1 hour' WHERE run_id = $1`, runID); err != nil {
+		`UPDATE task_runs SET state = 'failed' WHERE run_id = $1`, runID); err != nil {
 		t.Fatal(err)
 	}
 	// Crash-window orphan: dir that looks like an allocation but has no row.
@@ -297,10 +298,19 @@ func TestWorktreeReconcile_ExpiredLeaseAndOrphan(t *testing.T) {
 		t.Fatalf("orphans = %d, errors=%v", rep.OrphansQuarantined, rep.Errors)
 	}
 	if _, err := os.Stat(alloc.Worktree.Path); !os.IsNotExist(err) {
-		t.Fatal("expired-lease worktree still present")
+		t.Fatal("terminal run's worktree still present")
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatal("orphan dir still present")
+	}
+	// Cleanup must also clear the run's lease row.
+	var owner *string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT lease_owner FROM task_runs WHERE run_id = $1`, runID).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != nil {
+		t.Fatalf("lease owner still set after reconcile cleanup: %v", *owner)
 	}
 }
 

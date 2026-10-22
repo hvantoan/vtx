@@ -129,20 +129,30 @@ func (s *WorktreeService) RenewLease(ctx context.Context, runID string, epoch in
 
 // ReleaseWorktree runs the cleanup path for one run (run finished or its lease
 // was revoked). Dirt of any kind quarantines; only clean worktrees are removed.
+// Either way the run's lease row is cleared so a lingering expiry never
+// resurrects a dead claim — or delays the next owner's allocation.
 func (s *WorktreeService) ReleaseWorktree(ctx context.Context, runID, reason string) (WorktreeView, error) {
 	wt, err := s.store.GetWorktree(ctx, runID)
 	if err != nil {
 		return WorktreeView{}, err
 	}
 	if wt.Status != WorktreeAllocated {
-		return wt, nil // already released/quarantined: idempotent
+		// Already released/quarantined: idempotent — but an earlier cleanup
+		// may have crashed after the status flip and before clearing the
+		// lease, so finish that side too.
+		s.releaseLease(ctx, runID)
+		return wt, nil
 	}
 	return s.cleanupOne(ctx, wt, reason)
 }
 
 // Reconcile scans DB truth vs disk truth. Boot sweep and the Temporal schedule
-// call the same path (advise decision 4). A row is reclaimable when its run is
-// terminal or its lease expired — a live lease is never touched.
+// call the same path (advise decision 4). Only terminal runs are reclaimed:
+// non-terminal leases are NOT reclaimed until VTX-7 wires the execution
+// workflow to RenewWorktreeLease — with no renewal caller every live run's
+// lease expires one TTL after allocation, so lease expiry cannot yet
+// distinguish a dead worker from a live one. Interim trade-off: a dead
+// worker's non-terminal run leaks its worktree until the run transitions.
 func (s *WorktreeService) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	var rep ReconcileReport
 	rows, err := s.store.ListAllocatedWorktrees(ctx)
@@ -150,19 +160,13 @@ func (s *WorktreeService) Reconcile(ctx context.Context) (ReconcileReport, error
 		return rep, fmt.Errorf("list allocated worktrees: %w", err)
 	}
 	known := map[string]bool{}
-	now := s.clock.Now()
 	for _, row := range rows {
 		known[row.RunID] = true
 		terminal := row.RunState == "completed" || row.RunState == "failed" || row.RunState == "cancelled"
-		expired := row.RunLeaseExpireAt == nil || row.RunLeaseExpireAt.Before(now)
-		if !terminal && !expired {
+		if !terminal {
 			continue
 		}
-		reason := "run terminal"
-		if !terminal {
-			reason = "run lease expired"
-		}
-		outcome, err := s.cleanupAllocated(ctx, row, reason)
+		outcome, err := s.cleanupAllocated(ctx, row, "run terminal")
 		if err != nil {
 			rep.Errors = append(rep.Errors, fmt.Sprintf("run %s: %v", row.RunID, err))
 			continue
@@ -229,6 +233,7 @@ func (s *WorktreeService) cleanup(ctx context.Context, wt WorktreeView, repoURL,
 			if _, markErr := s.store.CompleteCleanup(ctx, wt.WorktreeID, WorktreeAllocated, WorktreeReleased, "path already absent"); markErr != nil {
 				return "", fmt.Errorf("mark released for absent path: %w", markErr)
 			}
+			s.releaseLease(ctx, wt.RunID)
 			return WorktreeReleased, nil
 		}
 		return "", fmt.Errorf("check dirty state: %w", err)
@@ -240,6 +245,7 @@ func (s *WorktreeService) cleanup(ctx context.Context, wt WorktreeView, repoURL,
 		if _, err := s.store.CompleteCleanup(ctx, wt.WorktreeID, WorktreeAllocated, WorktreeQuarantined, reason); err != nil {
 			return "", fmt.Errorf("mark quarantined: %w", err)
 		}
+		s.releaseLease(ctx, wt.RunID)
 		return WorktreeQuarantined, nil
 	}
 	repoDir, err := s.git.EnsureRepo(ctx, repoURL)
@@ -252,7 +258,28 @@ func (s *WorktreeService) cleanup(ctx context.Context, wt WorktreeView, repoURL,
 	if _, err := s.store.CompleteCleanup(ctx, wt.WorktreeID, WorktreeAllocated, WorktreeReleased, reason); err != nil {
 		return "", fmt.Errorf("mark released: %w", err)
 	}
+	s.releaseLease(ctx, wt.RunID)
 	return WorktreeReleased, nil
+}
+
+// releaseLease clears the run's lease row once cleanup finished. It releases
+// the RECORDED owner+epoch (read from the row), not this service's identity:
+// any worker may reconcile another's dead run, and the owner+epoch match in
+// ReleaseRunLease already fences out a re-acquired lease. Failure only warns —
+// a lingering lease expires on its own and never blocks a terminal run's
+// cleanup on the next pass.
+func (s *WorktreeService) releaseLease(ctx context.Context, runID string) {
+	owner, epoch, _, _, err := s.store.RunLeaseState(ctx, runID)
+	if err != nil {
+		s.logger.Warn("run lease state unreadable; lease left to expire", "run_id", runID, "error", err)
+		return
+	}
+	if owner == nil {
+		return // no lease recorded (pre-VTX-4 run or already released)
+	}
+	if err := s.store.ReleaseRunLease(ctx, runID, *owner, epoch); err != nil {
+		s.logger.Warn("run lease release failed; lease left to expire", "run_id", runID, "error", err)
+	}
 }
 
 // GetWorktree exposes the row for reads/HTTP.

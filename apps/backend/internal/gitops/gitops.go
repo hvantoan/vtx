@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Layout is the canonical on-disk contract. Every path the service produces
@@ -89,21 +91,73 @@ func (g Git) run(ctx context.Context, dir string, args ...string) (string, error
 
 // EnsureRepoCache clones repoURL into the cache once and fetches on later
 // calls. The clone is a regular (non-bare) clone so `git worktree add` works.
+//
+// Concurrency: clone AND fetch run under an exclusive flock on a per-key lock
+// file, so two workers sharing the same cache can never interleave a clone or
+// race parallel fetches. Inside the lock the .git check is re-done: a
+// crash-partial clone leaves a dir WITHOUT .git, which is removed and
+// recloned — a healthy cache is never rebuilt.
 func (g Git) EnsureRepoCache(ctx context.Context, layout Layout, repoURL string) (string, error) {
 	if err := os.MkdirAll(layout.RepoCacheRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create repo cache root: %w", err)
 	}
-	dir := filepath.Join(layout.RepoCacheRoot, repoCacheKey(repoURL))
+	key := repoCacheKey(repoURL)
+	unlock, err := lockRepoCache(ctx, layout.RepoCacheRoot, key)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
+	dir := filepath.Join(layout.RepoCacheRoot, key)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		if _, err := g.run(ctx, dir, "fetch", "--all", "--prune"); err != nil {
 			return "", fmt.Errorf("fetch repo cache: %w", err)
 		}
 		return dir, nil
 	}
+	// Remains of a crashed clone (or anything unexpected): clear and retry
+	// clean. The lock makes this safe — no peer can be mid-clone here.
+	if err := os.RemoveAll(dir); err != nil {
+		return "", fmt.Errorf("clear stale cache dir: %w", err)
+	}
 	if _, err := g.run(ctx, layout.RepoCacheRoot, "clone", repoURL, dir); err != nil {
 		return "", fmt.Errorf("clone repo: %w", err)
 	}
 	return dir, nil
+}
+
+// lockRepoCache takes an exclusive advisory lock on <root>/.locks/<key>.lock
+// and returns the release func. flock gives mutual exclusion across worker
+// PROCESSES (an in-process mutex cannot); the lock lives in a separate dir so
+// deleting the cache dir never unlinks the file peers are waiting on. The
+// acquire polls LOCK_NB so a cancelled allocation does not wait out a slow
+// first clone.
+func lockRepoCache(ctx context.Context, root, key string) (func(), error) {
+	lockDir := filepath.Join(root, ".locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create repo cache lock dir: %w", err)
+	}
+	f, err := os.OpenFile(filepath.Join(lockDir, key+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open repo cache lock: %w", err)
+	}
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		switch {
+		case err == nil:
+			return func() { _ = f.Close() }, nil
+		case errors.Is(err, syscall.EWOULDBLOCK):
+			select {
+			case <-ctx.Done():
+				_ = f.Close()
+				return nil, ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+		default:
+			_ = f.Close()
+			return nil, fmt.Errorf("lock repo cache: %w", err)
+		}
+	}
 }
 
 // AddWorktree creates <path> on a new or existing branch tracking baseRef.

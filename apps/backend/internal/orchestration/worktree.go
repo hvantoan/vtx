@@ -66,9 +66,11 @@ type RenewWorktreeLeaseInput struct {
 	LeaseEpoch int64  `json:"lease_epoch"`
 }
 
-// RenewWorktreeLease is the heartbeat→renewal the lease contract requires:
-// the execution workflow schedules it (or calls it alongside heartbeating
-// work) before LeaseExpiry so reconciliation never reclaims a live worktree.
+// RenewWorktreeLease is the heartbeat→renewal the lease contract requires.
+// Until the VTX-7 execution workflow lands and schedules it, NO caller exists:
+// the reconciler therefore only reclaims terminal runs (worktree_service.go
+// documents the interim rule) instead of trusting leases that can never be
+// renewed.
 func (a *WorktreeActivities) RenewWorktreeLease(ctx context.Context, in RenewWorktreeLeaseInput) (time.Time, error) {
 	activity.RecordHeartbeat(ctx, "lease-renew")
 	return a.svc.RenewLease(ctx, in.RunID, in.LeaseEpoch)

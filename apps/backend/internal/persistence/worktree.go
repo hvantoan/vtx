@@ -241,6 +241,21 @@ func (s *PgWorktreeStore) RenewRunLease(ctx context.Context, runID, owner string
 	return exp.Time, nil
 }
 
+// ReleaseRunLease clears the run's lease once worktree cleanup finished.
+// Owner+epoch match is enforced in SQL, so a stale owner can never clear a
+// fresher lease; 0 rows is a no-op (idempotent).
+func (s *PgWorktreeStore) ReleaseRunLease(ctx context.Context, runID, owner string, epoch int64) error {
+	runUUID, err := uuidFromString(runID)
+	if err != nil {
+		return fmt.Errorf("release run lease: %w", err)
+	}
+	return s.queries.ReleaseRunLease(ctx, db.ReleaseRunLeaseParams{
+		RunID:      runUUID,
+		LeaseOwner: textFromOptional(owner),
+		LeaseEpoch: epoch,
+	})
+}
+
 func isTerminalState(state string) bool {
 	return state == "completed" || state == "failed" || state == "cancelled"
 }
