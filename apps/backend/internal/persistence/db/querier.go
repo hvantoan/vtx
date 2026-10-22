@@ -27,6 +27,11 @@ type Querier interface {
 	// cannot drift apart, so two dispatcher replicas never claim the same event.
 	// Expired claims (claimed_until <= now()) are reclaimable after a crash.
 	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]ClaimOutboxEventsRow, error)
+	// The run is cancelled/terminal or the entry is otherwise dead: it must never
+	// receive a slot. Guarded on status so a racing grant cannot be undone.
+	CloseCodingEntry(ctx context.Context, arg CloseCodingEntryParams) (pgtype.UUID, error)
+	CountActiveSlotGrants(ctx context.Context) (int32, error)
+	CountGrantsForRun(ctx context.Context, runID pgtype.UUID) (int64, error)
 	// Lag of the consumer that reads `event_type` — count + age of the oldest
 	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
 	// the intended signal, not a stuck queue.
@@ -36,14 +41,29 @@ type Querier interface {
 	// Retention: terminal noise receipts age out; accepted/duplicate rows and
 	// inbox rows are kept as the dedup/audit record.
 	DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error)
+	// Idempotent: run_id is UNIQUE, so a repeated enqueue for the same run returns
+	// the existing row instead of creating a second queue position.
+	EnqueueCodingEntry(ctx context.Context, arg EnqueueCodingEntryParams) (CodingQueueEntry, error)
+	GetActiveGrantForRun(ctx context.Context, runID pgtype.UUID) (CodingSlotGrant, error)
+	GetActiveGrantForTask(ctx context.Context, taskID pgtype.UUID) (CodingSlotGrant, error)
 	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
+	GetCodingQueueEntryByRun(ctx context.Context, runID pgtype.UUID) (CodingQueueEntry, error)
+	GetCodingQueueEntryForUpdate(ctx context.Context, entryID pgtype.UUID) (CodingQueueEntry, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
 	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
 	// Lightweight lease read for fencing checks that do not need the whole row.
 	GetRunLeaseState(ctx context.Context, runID pgtype.UUID) (GetRunLeaseStateRow, error)
+	// Enqueue guard: the run row (locked FOR UPDATE by the caller's tx) joined
+	// to the worktree row that proves preparation is done. has_worktree=true is
+	// the "prepared" signal; preparing alone is not enough.
+	GetRunSchedulingEligibility(ctx context.Context, runID pgtype.UUID) (GetRunSchedulingEligibilityRow, error)
+	// Re-check inside the grant tx: a cancel that landed between the candidate
+	// list and the grant must win — locked row read, never the stale list.
+	GetRunStateForEntry(ctx context.Context, runID pgtype.UUID) (string, error)
 	// Allocation input: the run's task identity fields plus its repo_url (nullable
 	// for tasks created before VTX-4 or before a repo was recorded).
 	GetRunTaskRepo(ctx context.Context, runID pgtype.UUID) (GetRunTaskRepoRow, error)
+	GetSlotGrantForUpdate(ctx context.Context, grantID pgtype.UUID) (CodingSlotGrant, error)
 	GetTask(ctx context.Context, id string) (Task, error)
 	GetTaskRun(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
 	// The row lock that makes the §0.D error ordering deterministic: the first
@@ -56,6 +76,7 @@ type Querier interface {
 	HasActiveRunForTask(ctx context.Context, taskID pgtype.UUID) (bool, error)
 	// An intent is consumed once it has either an admitted run or a deferred row.
 	HasConsumedIntent(ctx context.Context, intentID pgtype.UUID) (bool, error)
+	InsertCodingSlotEvent(ctx context.Context, arg InsertCodingSlotEventParams) error
 	// ON CONFLICT DO NOTHING ⇒ replaying the same intent yields no row (the
 	// inbox receipt already deduped it, this is belt and braces).
 	InsertDeferredIntent(ctx context.Context, arg InsertDeferredIntentParams) (DeferredIntent, error)
@@ -69,6 +90,7 @@ type Querier interface {
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error)
+	InsertSlotGrant(ctx context.Context, arg InsertSlotGrantParams) (CodingSlotGrant, error)
 	// run_id comes from gen_random_uuid() — never from the Go process.
 	InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) (TaskRun, error)
 	// I-05: the creation row is version 0 with previous_state = '' (a run is born,
@@ -88,17 +110,38 @@ type Querier interface {
 	// Reconcile read: every allocated row joined to its run so the caller can see
 	// terminal runs and expired leases without a second query.
 	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
+	ListCodingSlotEventsForRun(ctx context.Context, runID pgtype.UUID) ([]CodingSlotEvent, error)
 	// FIFO order is the contract for the admission path (VTX-5).
 	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
+	// Slot numbers below max_slots with no non-released grant. Called under the
+	// pool row lock so concurrent schedulers cannot pick the same number.
+	ListFreeSlotNumbers(ctx context.Context, dollar_1 int32) ([]int32, error)
+	// Suspect sweep: held grants whose heartbeat is missing or older than the
+	// cutoff. They keep their slot — suspect marks "needs operator", never
+	// "auto-release".
+	ListHeldGrantsStaleHeartbeat(ctx context.Context, cutoff pgtype.Timestamptz) ([]CodingSlotGrant, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	// Cursor on version, and the creation audit (version 0) must be reachable:
 	// a NULL cursor means "from the beginning", not "after 0".
 	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
+	// Candidates for the next scheduling pass: still waiting, not parked behind a
+	// recheck_at backoff, joined to the run + task for state and Jira identity.
+	// Order is the FIFO hint only; the service re-sorts by Jira priority.
+	ListWaitingCodingEntries(ctx context.Context, arg ListWaitingCodingEntriesParams) ([]ListWaitingCodingEntriesRow, error)
+	// VTX-5 coding slot scheduler queries. Mutations run inside the single
+	// pgx.Tx owned by PgSchedulerStore (queries.WithTx): pool lock + entry check +
+	// run check + grant insert + entry update + audit commit or roll back
+	// together — the same boundary discipline as the registry.
+	// Singleton ledger row. FOR UPDATE serializes every grant transaction across
+	// all scheduler replicas; the row also carries max_slots.
+	LockCodingSlotPool(ctx context.Context) (CodingSlotPool, error)
 	// Serialize deliveries that refer to the same intent, even when they carry
 	// different source event IDs. The intent row is created before its outbox
 	// event, so a missing row is a payload contract fault.
 	LockExecutionIntent(ctx context.Context, intentID pgtype.UUID) (pgtype.UUID, error)
+	MarkCodingEntryGranted(ctx context.Context, entryID pgtype.UUID) error
+	MarkGrantSuspect(ctx context.Context, grantID pgtype.UUID) error
 	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
 	// second ACK for the same event reports 0 rows.
 	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)
@@ -108,11 +151,19 @@ type Querier interface {
 	// Dead letter: unsupported event_type, schema-invalid payload or exhausted
 	// retries. The row is kept (audit) and excluded from claim until redrive.
 	QuarantineOutboxEvent(ctx context.Context, arg QuarantineOutboxEventParams) (int64, error)
+	// Heartbeat from the executing worker. Epoch match is mandatory: a heartbeat
+	// from an old session must not revive bookkeeping for a new grant.
+	RecordSlotHeartbeat(ctx context.Context, arg RecordSlotHeartbeatParams) error
 	// Operator action: clear the DLQ marker and let the dispatcher try again.
 	RedriveOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
 	// Idempotent release: owner+epoch match required, so a stale owner can never
 	// clear a fresher lease.
 	ReleaseRunLease(ctx context.Context, arg ReleaseRunLeaseParams) error
+	// Guarded release: only a held/suspect grant whose session_epoch matches the
+	// caller's fencing token may flip to released. 0 rows means the confirmation
+	// was stale or the grant was already released — both are safe no-ops that the
+	// caller classifies from the locked row.
+	ReleaseSlotGrant(ctx context.Context, arg ReleaseSlotGrantParams) (pgtype.UUID, error)
 	// Only the recorded owner holding the presented epoch may renew, and only
 	// while the run is live — a terminal run's lease must never be extended.
 	// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
@@ -120,6 +171,10 @@ type Querier interface {
 	// Bounded retry: bump attempt, back off, release the claim so a sibling
 	// replica can pick the event up again.
 	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) (int64, error)
+	SchedulerMetrics(ctx context.Context) (SchedulerMetricsRow, error)
+	// Records WHY an entry cannot be granted right now and when to re-evaluate.
+	// The entry stays 'waiting': a blocked head must never stall later entries.
+	SetCodingEntryBlock(ctx context.Context, arg SetCodingEntryBlockParams) error
 	// Allocation-time repo binding: the scheduler passes repo_url and the first
 	// allocation records it on the task. Later allocations reuse the stored value.
 	SetRegistryTaskRepoURL(ctx context.Context, arg SetRegistryTaskRepoURLParams) error
