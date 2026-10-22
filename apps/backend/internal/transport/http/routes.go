@@ -74,6 +74,13 @@ func (s *Server) Routes() http.Handler {
 				r.Post("/worktrees/runs/{run_id}/release", s.HandleWorktreeRelease)
 			})
 		}
+		// VTX-5 scheduler surface (Phase 1: read-only metrics).
+		if s.scheduler != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(RegistryActorMiddleware(s.cfg.RegistryActorTokens))
+				r.Get("/scheduler/metrics", s.HandleSchedulerMetrics)
+			})
+		}
 	})
 
 	return r

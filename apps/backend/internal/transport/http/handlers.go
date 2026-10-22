@@ -37,6 +37,8 @@ type Server struct {
 	registryTransitions RegistryTransitioner
 	// VTX-4 worktree surface. Nil until WithWorktree is called.
 	worktree WorktreeService
+	// VTX-5 scheduler surface. Nil until WithScheduler is called.
+	scheduler SchedulerMetricsReader
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {

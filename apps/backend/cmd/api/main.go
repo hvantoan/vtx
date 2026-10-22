@@ -153,6 +153,36 @@ func main() {
 			application.SystemClock{},
 			logger,
 		))
+
+		// VTX-5 scheduler surface. The Jira client feeds the admission read
+		// (priority + blocked-by); the adapter maps its fields onto the
+		// application port so application never imports integrations.
+		if schedJira, err := jira.NewClient(cfg.JiraBaseURL, cfg.JiraAPIEmail, cfg.JiraAPIToken); err == nil {
+			provider := application.SchedulingDataProviderFunc(
+				func(ctx context.Context, issueID string) (application.SchedulingData, error) {
+					d, err := schedJira.FetchSchedulingData(ctx, issueID)
+					if err != nil {
+						return application.SchedulingData{}, err
+					}
+					out := application.SchedulingData{PriorityName: d.PriorityName}
+					for _, b := range d.BlockedBy {
+						out.BlockedBy = append(out.BlockedBy, application.BlockerRef{
+							IssueID: b.IssueID, IssueKey: b.IssueKey,
+							StatusName: b.StatusName, Done: b.Done,
+						})
+					}
+					return out, nil
+				})
+			server.WithScheduler(application.NewSchedulerService(
+				persistence.NewPgSchedulerStore(db.Pool, db.Queries),
+				provider,
+				cfg.RegistryConsumerName,
+				application.SystemClock{},
+				logger,
+			))
+		} else {
+			logger.Warn("scheduler disabled: Jira client unavailable", "error", err)
+		}
 	}
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 
