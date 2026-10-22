@@ -131,6 +131,117 @@ type issueResponse struct {
 	} `json:"fields"`
 }
 
+// schedulingResponse is the VTX-5 admission read: priority plus every inward
+// "is blocked by" link, each with the linked issue's status category so the
+// scheduler can decide done/not-done without a second fetch.
+type schedulingResponse struct {
+	ID     string `json:"id"`
+	Key    string `json:"key"`
+	Fields struct {
+		Priority struct {
+			Name string `json:"name"`
+		} `json:"priority"`
+		IssueLinks []struct {
+			Type struct {
+				Name   string `json:"name"`
+				Inward string `json:"inward"`
+			} `json:"type"`
+			InwardIssue *struct {
+				ID     string `json:"id"`
+				Key    string `json:"key"`
+				Fields struct {
+					Status struct {
+						Name           string `json:"name"`
+						StatusCategory *struct {
+							Key string `json:"key"`
+						} `json:"statusCategory"`
+					} `json:"status"`
+				} `json:"fields"`
+			} `json:"inwardIssue"`
+		} `json:"issuelinks"`
+	} `json:"fields"`
+}
+
+// IssueSchedulingData is the adapter's view of the VTX-5 admission inputs.
+type IssueSchedulingData struct {
+	ID           string
+	Key          string
+	PriorityName string
+	BlockedBy    []IssueBlocker
+}
+
+// IssueBlocker is one inward "is blocked by" link.
+type IssueBlocker struct {
+	IssueID    string
+	IssueKey   string
+	StatusName string
+	Done       bool
+}
+
+// FetchSchedulingData fetches the issue's priority and resolves every inward
+// "is blocked by" link to a done/not-done verdict in ONE request (the linked
+// issue's status category arrives inline with the issuelinks field). Missing
+// or unreadable categories count as NOT done — unverified never admits.
+func (c *Client) FetchSchedulingData(ctx context.Context, issueID string) (IssueSchedulingData, error) {
+	if err := ValidateIssueID(issueID); err != nil {
+		return IssueSchedulingData{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, requestBudget)
+	defer cancel()
+
+	endpoint := *c.baseURL
+	endpoint.Path = endpoint.Path + "/rest/api/3/issue/" + url.PathEscape(issueID)
+	q := endpoint.Query()
+	q.Set("fields", "priority,issuelinks")
+	endpoint.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return IssueSchedulingData{}, fmt.Errorf("build request: %w", err)
+	}
+	req.SetBasicAuth(c.email, c.apiToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return IssueSchedulingData{}, fmt.Errorf("%w: jira api call: %v", ErrRetryable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return IssueSchedulingData{}, fmt.Errorf("%w: jira api status %d", ErrRetryable, resp.StatusCode)
+	}
+
+	var body schedulingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return IssueSchedulingData{}, fmt.Errorf("%w: decode scheduling response: %v", ErrRetryable, err)
+	}
+	if body.ID == "" || body.ID != issueID {
+		return IssueSchedulingData{}, fmt.Errorf("%w: issue response id %q does not match requested %q", ErrRetryable, body.ID, issueID)
+	}
+
+	out := IssueSchedulingData{
+		ID:           body.ID,
+		Key:          body.Key,
+		PriorityName: body.Fields.Priority.Name,
+	}
+	for _, link := range body.Fields.IssueLinks {
+		if link.Type.Inward != "is blocked by" || link.InwardIssue == nil {
+			continue
+		}
+		blocker := IssueBlocker{
+			IssueID:    link.InwardIssue.ID,
+			IssueKey:   link.InwardIssue.Key,
+			StatusName: link.InwardIssue.Fields.Status.Name,
+		}
+		cat := link.InwardIssue.Fields.Status.StatusCategory
+		blocker.Done = cat != nil && cat.Key == "done"
+		out.BlockedBy = append(out.BlockedBy, blocker)
+	}
+	return out, nil
+}
+
 // FetchIssue re-fetches the issue and returns its authoritative identity —
 // issue ID, key, project key, and current status ID. The caller compares all
 // four against the webhook payload; trusting payload fields alone is what

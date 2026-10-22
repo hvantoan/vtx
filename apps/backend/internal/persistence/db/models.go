@@ -18,6 +18,37 @@ type AgentSession struct {
 	EndedAt   pgtype.Timestamptz `json:"ended_at"`
 }
 
+type CodingQueue struct {
+	QueueID       pgtype.UUID        `json:"queue_id"`
+	RunID         pgtype.UUID        `json:"run_id"`
+	TaskID        pgtype.UUID        `json:"task_id"`
+	JiraSiteID    string             `json:"jira_site_id"`
+	JiraIssueID   string             `json:"jira_issue_id"`
+	JiraIssueKey  string             `json:"jira_issue_key"`
+	PriorityRank  int32              `json:"priority_rank"`
+	PriorityName  pgtype.Text        `json:"priority_name"`
+	FifoSeq       int64              `json:"fifo_seq"`
+	Status        string             `json:"status"`
+	BlockedReason pgtype.Text        `json:"blocked_reason"`
+	GrantID       pgtype.UUID        `json:"grant_id"`
+	EnqueuedAt    pgtype.Timestamptz `json:"enqueued_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CodingSlot struct {
+	GrantID       pgtype.UUID        `json:"grant_id"`
+	QueueID       pgtype.UUID        `json:"queue_id"`
+	RunID         pgtype.UUID        `json:"run_id"`
+	TaskID        pgtype.UUID        `json:"task_id"`
+	WorkerOwner   string             `json:"worker_owner"`
+	Status        string             `json:"status"`
+	HeartbeatAt   pgtype.Timestamptz `json:"heartbeat_at"`
+	Suspected     bool               `json:"suspected"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ReleasedAt    pgtype.Timestamptz `json:"released_at"`
+	ReleaseReason pgtype.Text        `json:"release_reason"`
+}
+
 type DeferredIntent struct {
 	IntentID    pgtype.UUID        `json:"intent_id"`
 	TaskID      pgtype.UUID        `json:"task_id"`
@@ -85,6 +116,18 @@ type RegistryTask struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	RepoUrl      pgtype.Text        `json:"repo_url"`
+}
+
+type SchedulerEvent struct {
+	EventID   pgtype.UUID        `json:"event_id"`
+	EventType string             `json:"event_type"`
+	RunID     pgtype.UUID        `json:"run_id"`
+	QueueID   pgtype.UUID        `json:"queue_id"`
+	GrantID   pgtype.UUID        `json:"grant_id"`
+	Actor     string             `json:"actor"`
+	Reason    pgtype.Text        `json:"reason"`
+	Metadata  []byte             `json:"metadata"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Task struct {
