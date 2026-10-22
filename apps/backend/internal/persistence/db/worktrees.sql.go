@@ -349,6 +349,7 @@ WHERE run_id = $1
   AND lease_owner = $2
   AND lease_epoch = $4
   AND lease_expires_at > CURRENT_TIMESTAMP
+  AND state NOT IN ('completed', 'failed', 'cancelled')
 RETURNING lease_expires_at
 `
 
@@ -359,8 +360,9 @@ type RenewRunLeaseParams struct {
 	LeaseEpoch     int64              `json:"lease_epoch"`
 }
 
-// Only the recorded owner holding the presented epoch may renew. 0 rows ⇒
-// caller treats it as a lost lease (stale epoch).
+// Only the recorded owner holding the presented epoch may renew, and only
+// while the run is live — a terminal run's lease must never be extended.
+// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
 func (q *Queries) RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error) {
 	row := q.db.QueryRow(ctx, renewRunLease,
 		arg.RunID,

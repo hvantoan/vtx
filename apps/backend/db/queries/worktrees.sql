@@ -17,8 +17,9 @@ WHERE run_id = $1
 RETURNING lease_owner, lease_epoch, lease_expires_at;
 
 -- name: RenewRunLease :one
--- Only the recorded owner holding the presented epoch may renew. 0 rows ⇒
--- caller treats it as a lost lease (stale epoch).
+-- Only the recorded owner holding the presented epoch may renew, and only
+-- while the run is live — a terminal run's lease must never be extended.
+-- 0 rows ⇒ caller treats it as a lost lease (stale epoch).
 UPDATE task_runs
 SET lease_expires_at = $3,
     updated_at = CURRENT_TIMESTAMP
@@ -26,6 +27,7 @@ WHERE run_id = $1
   AND lease_owner = $2
   AND lease_epoch = $4
   AND lease_expires_at > CURRENT_TIMESTAMP
+  AND state NOT IN ('completed', 'failed', 'cancelled')
 RETURNING lease_expires_at;
 
 -- name: ReleaseRunLease :exec

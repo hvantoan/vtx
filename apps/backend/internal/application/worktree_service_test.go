@@ -15,8 +15,10 @@ type fakeWorktreeStore struct {
 	leaseState  struct {
 		owner *string
 		epoch int64
+		state string
 	}
-	effectRan int
+	releasedLeases []string // run_ids whose lease was released
+	effectRan      int
 }
 
 func (f *fakeWorktreeStore) AllocateWorktree(ctx context.Context, cmd AllocateCommand, effect func(AllocateInput) (string, string, string, error)) (Allocation, error) {
@@ -66,14 +68,30 @@ func (f *fakeWorktreeStore) ListAllocatedWorktrees(ctx context.Context) ([]Alloc
 }
 
 func (f *fakeWorktreeStore) RunLeaseState(ctx context.Context, runID string) (*string, int64, *time.Time, string, error) {
-	return f.leaseState.owner, f.leaseState.epoch, nil, "preparing", nil
+	state := f.leaseState.state
+	if state == "" {
+		state = "preparing"
+	}
+	return f.leaseState.owner, f.leaseState.epoch, nil, state, nil
 }
 
 func (f *fakeWorktreeStore) RenewRunLease(ctx context.Context, runID, owner string, epoch int64, expiresAt time.Time) (time.Time, error) {
 	if f.leaseState.owner == nil || *f.leaseState.owner != owner || f.leaseState.epoch != epoch {
 		return time.Time{}, ErrWorktreeLeaseLost
 	}
+	if f.leaseState.state == "completed" || f.leaseState.state == "failed" || f.leaseState.state == "cancelled" {
+		return time.Time{}, ErrWorktreeLeaseLost
+	}
 	return expiresAt, nil
+}
+
+func (f *fakeWorktreeStore) ReleaseRunLease(ctx context.Context, runID, owner string, epoch int64) error {
+	if f.leaseState.owner == nil || *f.leaseState.owner != owner || f.leaseState.epoch != epoch {
+		return nil // stale owner/epoch: no-op, same as the SQL guard
+	}
+	f.leaseState.owner = nil
+	f.releasedLeases = append(f.releasedLeases, runID)
+	return nil
 }
 
 // Fake git.
@@ -87,6 +105,7 @@ type fakeGit struct {
 	quarantined []string
 	orphans     []string
 	paths       map[string]string
+	knownSeen   map[string]bool // last `known` map OrphanDirs received
 }
 
 func (f *fakeGit) EnsureRepo(ctx context.Context, repoURL string) (string, error) {
@@ -116,6 +135,7 @@ func (f *fakeGit) Quarantine(ctx context.Context, runID, path, reason string) (s
 	return "/q/" + runID, nil
 }
 func (f *fakeGit) OrphanDirs(ctx context.Context, known map[string]bool) ([]string, error) {
+	f.knownSeen = known
 	return f.orphans, nil
 }
 
@@ -223,6 +243,18 @@ func TestRenewLease_StaleEpochRejected(t *testing.T) {
 	}
 }
 
+func TestRenewLease_TerminalRunRejected(t *testing.T) {
+	owner := "test-owner"
+	store := &fakeWorktreeStore{worktrees: map[string]WorktreeView{}}
+	store.leaseState.owner = &owner
+	store.leaseState.epoch = 3
+	store.leaseState.state = "failed"
+	svc := newTestService(store, newFakeGit())
+	if _, err := svc.RenewLease(context.Background(), "run-1", 3); !errors.Is(err, ErrWorktreeLeaseLost) {
+		t.Fatalf("err = %v, want ErrWorktreeLeaseLost", err)
+	}
+}
+
 func TestReleaseWorktree_DirtyQuarantines(t *testing.T) {
 	store := &fakeWorktreeStore{worktrees: map[string]WorktreeView{
 		"run-1": {WorktreeID: "wt-1", RunID: "run-1", Status: WorktreeAllocated, Path: "/root/run-1", RepoURL: "r"},
@@ -257,6 +289,25 @@ func TestReleaseWorktree_CleanRemoves(t *testing.T) {
 	}
 }
 
+func TestReleaseWorktree_ClearsRunLease(t *testing.T) {
+	owner := "test-owner"
+	store := &fakeWorktreeStore{worktrees: map[string]WorktreeView{
+		"run-1": {WorktreeID: "wt-1", RunID: "run-1", Status: WorktreeAllocated, Path: "/root/run-1", RepoURL: "r"},
+	}}
+	store.leaseState.owner = &owner
+	store.leaseState.epoch = 2
+	svc := newTestService(store, newFakeGit())
+	if _, err := svc.ReleaseWorktree(context.Background(), "run-1", "done"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if len(store.releasedLeases) != 1 || store.releasedLeases[0] != "run-1" {
+		t.Fatalf("releasedLeases = %v, want [run-1]", store.releasedLeases)
+	}
+	if store.leaseState.owner != nil {
+		t.Fatal("lease owner still set after release")
+	}
+}
+
 func TestReconcile_LiveLeaseUntouched(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	store := &fakeWorktreeStore{
@@ -278,7 +329,7 @@ func TestReconcile_LiveLeaseUntouched(t *testing.T) {
 	}
 }
 
-func TestReconcile_ExpiredLeaseReclaimed(t *testing.T) {
+func TestReconcile_ExpiredLeaseKeptWhileRunLive(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	store := &fakeWorktreeStore{
 		worktrees: map[string]WorktreeView{
@@ -288,6 +339,34 @@ func TestReconcile_ExpiredLeaseReclaimed(t *testing.T) {
 			WorktreeView:     WorktreeView{WorktreeID: "wt-1", RunID: "run-1", Status: "allocated", Path: "/root/run-1", RepoURL: "r"},
 			RunState:         "coding",
 			RunLeaseExpireAt: &past,
+		}},
+	}
+	git := newFakeGit()
+	svc := newTestService(store, git)
+	rep, err := svc.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if rep.Released+rep.Quarantined != 0 || len(git.removed)+len(git.quarantined) != 0 {
+		t.Fatalf("live run's worktree was reclaimed on lease expiry: %+v", rep)
+	}
+	// The live row must still reach the disk sweep's exclusion set —
+	// otherwise OrphanDirs would quarantine its dir as an orphan.
+	if !git.knownSeen["run-1"] {
+		t.Fatal("live run missing from orphan-sweep exclusion set")
+	}
+}
+
+func TestReconcile_TerminalRunReclaimedWithLiveLease(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	store := &fakeWorktreeStore{
+		worktrees: map[string]WorktreeView{
+			"run-1": {WorktreeID: "wt-1", RunID: "run-1", Status: WorktreeAllocated, Path: "/root/run-1", RepoURL: "r"},
+		},
+		allocated: []AllocatedWorktreeView{{
+			WorktreeView:     WorktreeView{WorktreeID: "wt-1", RunID: "run-1", Status: "allocated", Path: "/root/run-1", RepoURL: "r"},
+			RunState:         "failed",
+			RunLeaseExpireAt: &future,
 		}},
 	}
 	git := newFakeGit()

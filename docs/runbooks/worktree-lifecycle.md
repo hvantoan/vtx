@@ -34,18 +34,23 @@ worktree lifecycle service (migration `00005_worktrees.sql`).
    untracked — moves the dir to `WORKTREE_QUARANTINE_ROOT` and flips status to
    `quarantined`. `git worktree remove` only runs on a clean tree; `--force`
    is never used.
-6. **Reconcile runs twice ways:** once at worker boot (crash orphans, expired
-   leases left by the dead process) and on Temporal schedule
-   `vtx-worktree-reconcile` every `WORKTREE_RECONCILE_INTERVAL` (lease expiry
-   happens when *other* workers die, so a boot sweep alone cannot cover it).
+6. **Reconcile runs twice ways:** once at worker boot and on Temporal
+   schedule `vtx-worktree-reconcile` every `WORKTREE_RECONCILE_INTERVAL`.
+   It reclaims worktrees of **terminal runs** and quarantines crash-orphan
+   dirs. Expired leases on *non-terminal* runs are **not** reclaimed until
+   VTX-7 wires `RenewWorktreeLease` — with no renewal caller every live
+   lease expires one TTL after allocation, so expiry cannot yet separate a
+   dead worker from a live one. Trade-off: a dead worker's non-terminal
+   run leaks its worktree until the run transitions.
 7. **Paths are canonicalized** against the configured roots before any fs/git
    op (`gitops.CanonicalPath`): traversal and symlink escapes are rejected.
 
 ## Surfaces
 
 - **Temporal activities** (registered in `cmd/worker`):
-  `AllocateWorktree`, `ReleaseWorktree`, `ReconcileWorktrees`;
-  `WorktreeReconcileWorkflow` is the schedule entrypoint.
+  `AllocateWorktree`, `RenewWorktreeLease`, `ReleaseWorktree`,
+  `ReconcileWorktrees`; `WorktreeReconcileWorkflow` is the schedule
+  entrypoint.
 - **HTTP** (`RegistryActorMiddleware` group):
   `POST /api/v1/worktrees/allocate` `{run_id, repo_url?, base_ref?}` → 201/200,
   `GET /api/v1/worktrees`, `GET /api/v1/worktrees/runs/{run_id}`,
@@ -70,6 +75,13 @@ worktree lifecycle service (migration `00005_worktrees.sql`).
 - Quarantined dirs are never auto-deleted; operators inspect and remove
   manually.
 - `worktrees` rows are kept after release (history), like `task_run_events`.
+- **Platform support:** the backend targets unix (Linux/macOS in CI and
+  deployment). The repo-cache lock is per-GOOS (`internal/gitops/lock_unix.go`
+  → `flock`, `lock_windows.go` → `LockFileEx`), so `internal/gitops` compiles
+  everywhere; `internal/agent` process-group supervision (`Setpgid`, signal
+  `-pgid`) is unix-only by build constraint — `GOOS=windows go build ./...`
+  succeeds only because nothing imports that package yet. A Windows agent
+  supervisor needs a Job-Object port, not a syscall shim.
 
 ## Handoff
 
@@ -77,8 +89,11 @@ worktree lifecycle service (migration `00005_worktrees.sql`).
   inside the `preparing` stage; pass `repo_url` on the first allocation for a
   task. `existing=true` means a previous attempt already owns the row.
 - **VTX-7**: run the agent with `cwd = response.path`, branch already created
-  (`response.branch`). On run completion call `ReleaseWorktree` — dirty trees
-  quarantine, so uncommitted agent output is never lost silently.
+  (`response.branch`). Schedule `RenewWorktreeLease` (heartbeat cadence
+  shorter than `WORKTREE_LEASE_TTL`) for the lease to mean anything —
+  until then reconcile only reclaims terminal runs. On run completion call
+  `ReleaseWorktree` — dirty trees quarantine, so uncommitted agent output
+  is never lost silently.
 
 ## Remaining risks
 

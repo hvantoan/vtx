@@ -113,8 +113,9 @@ type Querier interface {
 	// Idempotent release: owner+epoch match required, so a stale owner can never
 	// clear a fresher lease.
 	ReleaseRunLease(ctx context.Context, arg ReleaseRunLeaseParams) error
-	// Only the recorded owner holding the presented epoch may renew. 0 rows ⇒
-	// caller treats it as a lost lease (stale epoch).
+	// Only the recorded owner holding the presented epoch may renew, and only
+	// while the run is live — a terminal run's lease must never be extended.
+	// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
 	RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error)
 	// Bounded retry: bump attempt, back off, release the claim so a sibling
 	// replica can pick the event up again.
