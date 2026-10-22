@@ -18,6 +18,51 @@ type AgentSession struct {
 	EndedAt   pgtype.Timestamptz `json:"ended_at"`
 }
 
+type CodingQueueEntry struct {
+	EntryID     pgtype.UUID        `json:"entry_id"`
+	RunID       pgtype.UUID        `json:"run_id"`
+	TaskID      pgtype.UUID        `json:"task_id"`
+	FifoSeq     pgtype.Int8        `json:"fifo_seq"`
+	Status      string             `json:"status"`
+	BlockReason pgtype.Text        `json:"block_reason"`
+	RecheckAt   pgtype.Timestamptz `json:"recheck_at"`
+	EnqueuedAt  pgtype.Timestamptz `json:"enqueued_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CodingSlotEvent struct {
+	EventID   pgtype.UUID        `json:"event_id"`
+	GrantID   pgtype.UUID        `json:"grant_id"`
+	EntryID   pgtype.UUID        `json:"entry_id"`
+	RunID     pgtype.UUID        `json:"run_id"`
+	Action    string             `json:"action"`
+	Actor     string             `json:"actor"`
+	Reason    pgtype.Text        `json:"reason"`
+	Metadata  []byte             `json:"metadata"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type CodingSlotGrant struct {
+	GrantID            pgtype.UUID        `json:"grant_id"`
+	SlotNo             int32              `json:"slot_no"`
+	RunID              pgtype.UUID        `json:"run_id"`
+	TaskID             pgtype.UUID        `json:"task_id"`
+	EntryID            pgtype.UUID        `json:"entry_id"`
+	Owner              string             `json:"owner"`
+	SessionEpoch       int64              `json:"session_epoch"`
+	Status             string             `json:"status"`
+	HeartbeatAt        pgtype.Timestamptz `json:"heartbeat_at"`
+	ReleaseReason      pgtype.Text        `json:"release_reason"`
+	ReleaseConfirmedAt pgtype.Timestamptz `json:"release_confirmed_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CodingSlotPool struct {
+	PoolID   int16 `json:"pool_id"`
+	MaxSlots int32 `json:"max_slots"`
+}
+
 type DeferredIntent struct {
 	IntentID    pgtype.UUID        `json:"intent_id"`
 	TaskID      pgtype.UUID        `json:"task_id"`
