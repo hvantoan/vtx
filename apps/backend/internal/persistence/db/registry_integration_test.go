@@ -115,7 +115,7 @@ func seedIntent(t *testing.T, q *Queries, issueKey string) pgtype.UUID {
 	return intent.IntentID
 }
 
-func seedTask(t *testing.T, q *Queries, siteID, issueID string) RegistryTask {
+func seedTask(t *testing.T, q *Queries, siteID, issueID string) UpsertRegistryTaskRow {
 	t.Helper()
 	task, err := q.UpsertRegistryTask(context.Background(), UpsertRegistryTaskParams{
 		JiraSiteID:   siteID,

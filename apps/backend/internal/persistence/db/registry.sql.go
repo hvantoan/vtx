@@ -24,9 +24,20 @@ type GetRegistryTaskByIdentityParams struct {
 	JiraIssueID string `json:"jira_issue_id"`
 }
 
-func (q *Queries) GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (RegistryTask, error) {
+type GetRegistryTaskByIdentityRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	JiraSiteID   string             `json:"jira_site_id"`
+	JiraIssueID  string             `json:"jira_issue_id"`
+	JiraIssueKey string             `json:"jira_issue_key"`
+	ProjectKey   string             `json:"project_key"`
+	Version      int64              `json:"version"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error) {
 	row := q.db.QueryRow(ctx, getRegistryTaskByIdentity, arg.JiraSiteID, arg.JiraIssueID)
-	var i RegistryTask
+	var i GetRegistryTaskByIdentityRow
 	err := row.Scan(
 		&i.ID,
 		&i.JiraSiteID,
@@ -520,38 +531,55 @@ func (q *Queries) UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunState
 const upsertRegistryTask = `-- name: UpsertRegistryTask :one
 
 INSERT INTO registry_tasks (
-    jira_site_id, jira_issue_id, jira_issue_key, project_key
+    jira_site_id, jira_issue_id, jira_issue_key, project_key, repo_url
 ) VALUES (
-    $1, $2, $3, $4
+    $1, $2, $3, $4, $5
 )
 ON CONFLICT (jira_site_id, jira_issue_id) DO UPDATE
 SET jira_issue_key = EXCLUDED.jira_issue_key,
     project_key = EXCLUDED.project_key,
+    repo_url = COALESCE(EXCLUDED.repo_url, registry_tasks.repo_url),
     updated_at = CURRENT_TIMESTAMP
 RETURNING id, jira_site_id, jira_issue_id, jira_issue_key, project_key,
-    version, created_at, updated_at
+    version, repo_url, created_at, updated_at
 `
 
 type UpsertRegistryTaskParams struct {
-	JiraSiteID   string `json:"jira_site_id"`
-	JiraIssueID  string `json:"jira_issue_id"`
-	JiraIssueKey string `json:"jira_issue_key"`
-	ProjectKey   string `json:"project_key"`
+	JiraSiteID   string      `json:"jira_site_id"`
+	JiraIssueID  string      `json:"jira_issue_id"`
+	JiraIssueKey string      `json:"jira_issue_key"`
+	ProjectKey   string      `json:"project_key"`
+	RepoUrl      pgtype.Text `json:"repo_url"`
+}
+
+type UpsertRegistryTaskRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	JiraSiteID   string             `json:"jira_site_id"`
+	JiraIssueID  string             `json:"jira_issue_id"`
+	JiraIssueKey string             `json:"jira_issue_key"`
+	ProjectKey   string             `json:"project_key"`
+	Version      int64              `json:"version"`
+	RepoUrl      pgtype.Text        `json:"repo_url"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 // VTX-3 registry queries. Every mutation runs inside the single pgx.Tx opened
 // by the application service (queries.WithTx), so claim → transition → audit →
 // outbound event either all commit or none do (TR-17/TR-25).
-// Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key
-// are mutable metadata; the identity and task version are not touched here.
-func (q *Queries) UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (RegistryTask, error) {
+// Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key/
+// repo_url are mutable metadata; the identity and task version are not touched.
+// repo_url (VTX-4) is COALESCEd: a caller that does not know the repo yet must
+// not erase one a previous delivery recorded.
+func (q *Queries) UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error) {
 	row := q.db.QueryRow(ctx, upsertRegistryTask,
 		arg.JiraSiteID,
 		arg.JiraIssueID,
 		arg.JiraIssueKey,
 		arg.ProjectKey,
+		arg.RepoUrl,
 	)
-	var i RegistryTask
+	var i UpsertRegistryTaskRow
 	err := row.Scan(
 		&i.ID,
 		&i.JiraSiteID,
@@ -559,6 +587,7 @@ func (q *Queries) UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTask
 		&i.JiraIssueKey,
 		&i.ProjectKey,
 		&i.Version,
+		&i.RepoUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

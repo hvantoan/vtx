@@ -35,6 +35,8 @@ type Server struct {
 	// VTX-3 registry surface. Nil until WithRegistry is called.
 	registryReader      RegistryReader
 	registryTransitions RegistryTransitioner
+	// VTX-4 worktree surface. Nil until WithWorktree is called.
+	worktree WorktreeService
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {

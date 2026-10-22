@@ -84,6 +84,7 @@ type RegistryTask struct {
 	Version      int64              `json:"version"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	RepoUrl      pgtype.Text        `json:"repo_url"`
 }
 
 type Task struct {
@@ -154,4 +155,19 @@ type WebhookReceipt struct {
 	IssueKey    pgtype.Text        `json:"issue_key"`
 	ErrorDetail pgtype.Text        `json:"error_detail"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Worktree struct {
+	WorktreeID       pgtype.UUID        `json:"worktree_id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	Status           string             `json:"status"`
+	Path             string             `json:"path"`
+	Branch           string             `json:"branch"`
+	RepoUrl          string             `json:"repo_url"`
+	BaseSha          pgtype.Text        `json:"base_sha"`
+	QuarantineReason pgtype.Text        `json:"quarantine_reason"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	ReleasedAt       pgtype.Timestamptz `json:"released_at"`
 }
