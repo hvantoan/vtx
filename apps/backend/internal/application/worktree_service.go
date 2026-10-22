@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -210,9 +211,14 @@ func (s *WorktreeService) cleanupOne(ctx context.Context, wt WorktreeView, reaso
 func (s *WorktreeService) cleanup(ctx context.Context, wt WorktreeView, repoURL, reason string) (string, error) {
 	dirty, err := s.git.IsDirty(ctx, wt.Path)
 	if err != nil {
-		// Unreadable path: do not guess clean. Quarantine attempt would move an
-		// unknown dir; safer to mark quarantined with the error as the reason
-		// only when the dir is actually gone.
+		// Dir already gone (deleted out-of-band or a partially-failed earlier
+		// cleanup): nothing to reclaim — just close the row out.
+		if _, statErr := os.Stat(wt.Path); os.IsNotExist(statErr) {
+			if _, markErr := s.store.CompleteCleanup(ctx, wt.WorktreeID, WorktreeAllocated, WorktreeReleased, "path already absent"); markErr != nil {
+				return "", fmt.Errorf("mark released for absent path: %w", markErr)
+			}
+			return WorktreeReleased, nil
+		}
 		return "", fmt.Errorf("check dirty state: %w", err)
 	}
 	if dirty {
