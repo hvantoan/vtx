@@ -17,10 +17,11 @@ func TestWorktreeMigration_PopulatedVTX3Schema(t *testing.T) {
 
 	// Seed a populated VTX-3 chain: task → intent → run → event. These rows
 	// must survive the worktree migration untouched.
+	issueID := uniqueIssueID(t, pool)
 	var taskID, intentID, runID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO registry_tasks (jira_site_id, jira_issue_id, jira_issue_key, project_key)
-		 VALUES ('site', 'mig-1', 'VTX-900', 'VTX') RETURNING id`).Scan(&taskID); err != nil {
+		 VALUES ('site', $1, 'VTX-900', 'VTX') RETURNING id`, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
 	if err := pool.QueryRow(ctx,

@@ -92,7 +92,7 @@ func newWorktreeHarness(t *testing.T) *worktreeHarness {
 func (h *worktreeHarness) seedTaskAndRun(state string) (taskID, runID string) {
 	h.t.Helper()
 	h.seq++
-	key := fmt.Sprintf("VTX-9%03d", h.seq)
+	key := fmt.Sprintf("VTX-%d-%d", time.Now().UnixNano()%1_000_000, h.seq)
 	err := h.pool.QueryRow(context.Background(),
 		`INSERT INTO registry_tasks (jira_site_id, jira_issue_id, jira_issue_key, project_key, repo_url)
 		 VALUES ('site', $1, $2, 'VTX', $3) RETURNING id`,
