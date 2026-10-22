@@ -1,7 +1,7 @@
 ---
 title: "VTX-3 — Task Registry & Execution State Machine (AUTO-02)"
 description: "Durable task registry, version-CAS state machine, outbox consumer and actor-authenticated registry API, delivered with TR-01..TR-25 evidence at an exact SHA."
-status: pending
+status: done
 priority: P1
 effort: "8d"
 issue: VTX-3
@@ -47,7 +47,7 @@ Out of scope (Jira VTX-4..VTX-13): scheduler/admission/lease allocation (VTX-5),
 | 4 | [Outbox Dispatcher & Registry Worker Process](./phase-04-outbox-dispatcher-and-worker-process.md) | Done |
 | 5 | [HTTP API & Actor Auth](./phase-05-http-api-and-actor-auth.md) | Done |
 | 6 | [Contracts, Observability & Runbook](./phase-06-contracts-observability-runbook.md) | Done |
-| 7 | [Evidence & DoD Closure](./phase-07-evidence-and-dod-closure.md) | Done — CI-at-SHA item BLOCKED (uncommitted tree) |
+| 7 | [Evidence & DoD Closure](./phase-07-evidence-and-dod-closure.md) | Done — CI green at SHA `17956f7` (run 39649302996, artifact `registry-evidence-17956f74…`) |
 
 ## Cross-Plan Dependencies
 

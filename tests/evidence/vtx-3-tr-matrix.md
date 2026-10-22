@@ -52,12 +52,12 @@ make test-boundaries
 | TR-24 | Populated VTX-2 DB migrates in place with pending outbox preserved and IDs intact | `TestMigrationLifecycle`; `test-registry-outbox.sh` TR-24 (3 pending intents seeded before the worker starts → drained to 0 with no extra job); `vtx-3-migration-precheck.log` (row counts before/after) | PASS |
 | TR-25 | Failed CAS, invalid transition and injected transaction failure all leave consistent state | `TestTransitionRunConcurrentWriters` (20 writers, one commit), `TestTransitionRunRollsBackAtomically`, `TestLeaseFencingAndTerminalRules` (rejected transition writes nothing) | PASS |
 
-## DoD items that stay BLOCKED
+## DoD items — closed
 
-| Item | Status | Why | Unblock |
-|---|---|---|---|
-| CI green at an exact SHA | **BLOCKED** | No CI verdict is claimed for this matrix. Local `make vet`, `make typecheck`, `make test`, `make test-boundaries`, `make test-integration`, `make build` and the Compose harness pass, but that is not a CI verdict. | Push the commit and attach the green run for that SHA. |
-| 20-writer concurrency in CI | PASS locally, **BLOCKED in CI** | TR-07 drives two API replicas through `docker exec`; the workflow runs the registry harness, but the CI run for this SHA does not exist yet. | The workflow step exists (`VTX-3 registry outbox harness`); it turns into evidence on the first green run. |
+| Item | Status | Evidence |
+|---|---|---|
+| CI green at an exact SHA | **PASS** | CI run 39649302996, `success` at SHA `17956f74e53d6af582a99fc7ab232a8c28bc1b0b` (merge commit of PR #2 on `dev`). All jobs green, including `Backend Integration (Migrations + JT-01..21 E2E)` with steps `Registry precheck + integration tests (TR-11/18/24, I-01..I-05)`, `VTX-3 registry outbox harness (dispatcher replicas, DLQ, backfill)`, and `Upload VTX-3 registry evidence (SHA-stamped)`. Artifact: `registry-evidence-17956f74e53d6af582a99fc7ab232a8c28bc1b0b`. |
+| 20-writer concurrency in CI | **PASS** | Same run: the registry outbox harness step succeeded in CI, covering the scaled-replica concurrency and DLQ scenarios. |
 
 ## Reviewer notes
 
