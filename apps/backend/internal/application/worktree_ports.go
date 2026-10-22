@@ -108,6 +108,11 @@ type WorktreeStore interface {
 
 	// RunLeaseState reads the run's current lease fields and state.
 	RunLeaseState(ctx context.Context, runID string) (owner *string, epoch int64, expiresAt *time.Time, state string, err error)
+
+	// RenewRunLease extends the lease for owner+epoch; returns the new expiry.
+	// ErrWorktreeLeaseLost when the presented epoch is stale, the owner does
+	// not match, or the lease already expired.
+	RenewRunLease(ctx context.Context, runID, owner string, epoch int64, expiresAt time.Time) (time.Time, error)
 }
 
 // WorktreeGit is the disk side of the lifecycle (internal/gitops implements

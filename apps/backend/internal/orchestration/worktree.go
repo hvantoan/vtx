@@ -60,6 +60,20 @@ func (a *WorktreeActivities) AllocateWorktree(ctx context.Context, in AllocateWo
 	}, nil
 }
 
+// RenewWorktreeLeaseInput carries the fencing epoch the allocator returned.
+type RenewWorktreeLeaseInput struct {
+	RunID      string `json:"run_id"`
+	LeaseEpoch int64  `json:"lease_epoch"`
+}
+
+// RenewWorktreeLease is the heartbeat→renewal the lease contract requires:
+// the execution workflow schedules it (or calls it alongside heartbeating
+// work) before LeaseExpiry so reconciliation never reclaims a live worktree.
+func (a *WorktreeActivities) RenewWorktreeLease(ctx context.Context, in RenewWorktreeLeaseInput) (time.Time, error) {
+	activity.RecordHeartbeat(ctx, "lease-renew")
+	return a.svc.RenewLease(ctx, in.RunID, in.LeaseEpoch)
+}
+
 // ReleaseWorktreeInput asks the service to clean up a finished run's tree.
 type ReleaseWorktreeInput struct {
 	RunID  string `json:"run_id"`

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,6 +33,29 @@ func TestCanonicalPath_SymlinkEscapeRejected(t *testing.T) {
 	}
 	if _, err := CanonicalPath(root, filepath.Join(link, "wt")); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("err = %v, want ErrUnsafePath", err)
+	}
+}
+
+func TestCanonicalPath_LeafSymlinkRejected(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "run-1")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if _, err := CanonicalPath(root, link); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("err = %v, want ErrUnsafePath", err)
+	}
+}
+
+func TestCanonicalPath_MissingRootAllowed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "wt") // never created
+	got, err := CanonicalPath(root, filepath.Join(root, "run-1"))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if filepath.Dir(got) != root {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -132,6 +156,15 @@ func TestGitLifecycle_RealRepo(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "junk.txt")); err != nil {
 		t.Fatalf("quarantined file missing: %v", err)
+	}
+	// The repo's worktree metadata must not reference the old path: repair
+	// re-points it at the quarantine dest, prune drops it entirely.
+	out, err := g.run(ctx, cache, "worktree", "list")
+	if err != nil {
+		t.Fatalf("worktree list: %v", err)
+	}
+	if strings.Contains(out, wtPath) {
+		t.Fatalf("stale worktree entry for %s in:\n%s", wtPath, out)
 	}
 }
 

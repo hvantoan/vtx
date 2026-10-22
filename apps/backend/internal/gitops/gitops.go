@@ -154,9 +154,11 @@ func (g Git) RemoveWorktree(ctx context.Context, repoDir, path string) error {
 	return nil
 }
 
-// Quarantine moves a worktree aside instead of deleting it. The move unregisters
-// it in git terms first (git worktree remove would fail on dirt, so we detach
-// via `git worktree move`), then renames onto the quarantine root.
+// Quarantine moves a worktree aside instead of deleting it. The dir is
+// preserved first (rename onto the quarantine root); the repo's worktree
+// metadata is then re-pointed via `git worktree repair`, or unregistered via
+// `git worktree prune` when repair is unavailable — either way the common
+// checkout metadata never references the old path again.
 func (g Git) Quarantine(ctx context.Context, layout Layout, runID, path, reason string) (string, error) {
 	if err := os.MkdirAll(layout.QuarantineRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create quarantine root: %w", err)
@@ -165,18 +167,50 @@ func (g Git) Quarantine(ctx context.Context, layout Layout, runID, path, reason 
 	if _, err := os.Stat(dest); err == nil {
 		return "", fmt.Errorf("quarantine destination already exists: %s", dest)
 	}
+	// repoDir is "" for dirs that are not git worktrees (crash-window
+	// orphans): a plain rename is all they need.
+	repoDir, repoErr := worktreeMainRepo(path)
 	if err := os.Rename(path, dest); err != nil {
 		return "", fmt.Errorf("move worktree to quarantine: %w", err)
+	}
+	if repoErr == nil {
+		if _, err := g.run(ctx, repoDir, "worktree", "repair", dest); err != nil {
+			if _, perr := g.run(ctx, repoDir, "worktree", "prune"); perr != nil {
+				return "", fmt.Errorf("quarantined to %s but git metadata still references %s: repair: %v; prune: %w", dest, path, err, perr)
+			}
+		}
 	}
 	return dest, nil
 }
 
+// worktreeMainRepo finds a linked worktree's main repo by reading its .git
+// pointer file ("gitdir: <repo>/.git/worktrees/<name>").
+func worktreeMainRepo(path string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(path, ".git"))
+	if err != nil {
+		return "", err
+	}
+	line := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(line, "gitdir:") {
+		return "", errors.New("not a worktree .git pointer file")
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+	admin := filepath.Dir(gitdir)
+	gitDir := filepath.Dir(admin)
+	if filepath.Base(admin) != "worktrees" || filepath.Base(gitDir) != ".git" {
+		return "", fmt.Errorf("unexpected worktree gitdir %s", gitdir)
+	}
+	return filepath.Dir(gitDir), nil
+}
+
 var ErrUnsafePath = errors.New("gitops: path escapes configured root")
 
-// CanonicalPath resolves path and proves it stays under root. The leaf itself
-// need not exist yet (allocation target); the deepest existing ancestor is
-// what must not be a symlink out. This is the symlink/traversal gate the spec
-// requires before any fs or git mutation.
+// CanonicalPath resolves path and proves it stays under root. Neither the
+// root nor the leaf need to exist yet (fresh deploys, allocation targets):
+// resolution walks to the deepest existing ancestor and re-appends the
+// not-yet-existing suffix. An existing leaf that is itself a symlink is
+// rejected outright — ancestor checks alone would never inspect it. This is
+// the symlink/traversal gate the spec requires before any fs or git mutation.
 func CanonicalPath(root, path string) (string, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -189,24 +223,14 @@ func CanonicalPath(root, path string) (string, error) {
 	if absPath != absRoot && !strings.HasPrefix(absPath, absRoot+string(os.PathSeparator)) {
 		return "", fmt.Errorf("%w: %s not under %s", ErrUnsafePath, absPath, absRoot)
 	}
-	// Walk existing ancestors: a symlinked parent would let the leaf land
-	// outside the root even though the lexical path looks clean.
-	probe := absPath
-	for {
-		parent := filepath.Dir(probe)
-		if parent == probe {
-			break
-		}
-		probe = parent
-		if _, err := os.Lstat(probe); err == nil {
-			break
-		}
+	if fi, err := os.Lstat(absPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: %s is a symlink", ErrUnsafePath, absPath)
 	}
-	resolved, err := filepath.EvalSymlinks(probe)
+	resolved, err := resolveExistingPrefix(absPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve path ancestor: %w", err)
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	resolvedRoot, err := resolveExistingPrefix(absRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve root: %w", err)
 	}
@@ -214,6 +238,28 @@ func CanonicalPath(root, path string) (string, error) {
 		return "", fmt.Errorf("%w: %s resolves outside %s", ErrUnsafePath, absPath, absRoot)
 	}
 	return absPath, nil
+}
+
+// resolveExistingPrefix EvalSymlinks the deepest existing ancestor of path
+// (every existing component is inspected) and re-appends the non-existent
+// suffix, so roots and leaves that do not exist yet still get checked.
+func resolveExistingPrefix(path string) (string, error) {
+	probe := path
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", fmt.Errorf("no existing ancestor for %s", path)
+		}
+		probe = parent
+	}
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return "", err
+	}
+	return resolved + path[len(probe):], nil
 }
 
 // ListWorktreeDirs returns child directory names under WorktreeRoot that look

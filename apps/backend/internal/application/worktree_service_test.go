@@ -69,6 +69,13 @@ func (f *fakeWorktreeStore) RunLeaseState(ctx context.Context, runID string) (*s
 	return f.leaseState.owner, f.leaseState.epoch, nil, "preparing", nil
 }
 
+func (f *fakeWorktreeStore) RenewRunLease(ctx context.Context, runID, owner string, epoch int64, expiresAt time.Time) (time.Time, error) {
+	if f.leaseState.owner == nil || *f.leaseState.owner != owner || f.leaseState.epoch != epoch {
+		return time.Time{}, ErrWorktreeLeaseLost
+	}
+	return expiresAt, nil
+}
+
 // Fake git.
 type fakeGit struct {
 	repoDir     string
@@ -187,6 +194,32 @@ func TestAllocateWorktree_GitFailureLeavesNoRow(t *testing.T) {
 	}
 	if len(store.worktrees) != 0 {
 		t.Fatal("worktree row left behind after git failure")
+	}
+}
+
+func TestRenewLease_ExtendsForCurrentEpoch(t *testing.T) {
+	owner := "test-owner"
+	store := &fakeWorktreeStore{worktrees: map[string]WorktreeView{}}
+	store.leaseState.owner = &owner
+	store.leaseState.epoch = 3
+	svc := newTestService(store, newFakeGit())
+	expires, err := svc.RenewLease(context.Background(), "run-1", 3)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if expires.Before(time.Now()) {
+		t.Fatalf("renewed lease already expired: %v", expires)
+	}
+}
+
+func TestRenewLease_StaleEpochRejected(t *testing.T) {
+	owner := "test-owner"
+	store := &fakeWorktreeStore{worktrees: map[string]WorktreeView{}}
+	store.leaseState.owner = &owner
+	store.leaseState.epoch = 3
+	svc := newTestService(store, newFakeGit())
+	if _, err := svc.RenewLease(context.Background(), "run-1", 2); !errors.Is(err, ErrWorktreeLeaseLost) {
+		t.Fatalf("err = %v, want ErrWorktreeLeaseLost", err)
 	}
 }
 

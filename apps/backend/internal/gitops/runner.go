@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"fmt"
+	"os"
 )
 
 // Runner adapts Git+Layout to the application's WorktreeGit port: every path
@@ -21,6 +22,11 @@ func (r Runner) EnsureRepo(ctx context.Context, repoURL string) (string, error) 
 }
 
 func (r Runner) Add(ctx context.Context, repoDir, runID, branch, baseRef string) (string, error) {
+	// Fresh deployments start with no var/: the root must exist before the
+	// canonical check resolves it and before git creates the child dir.
+	if err := os.MkdirAll(r.Layout.WorktreeRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create worktree root: %w", err)
+	}
 	path, err := CanonicalPath(r.Layout.WorktreeRoot, r.Layout.WorktreePath(runID))
 	if err != nil {
 		return "", err

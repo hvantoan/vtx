@@ -221,6 +221,26 @@ func (s *PgWorktreeStore) RunLeaseState(ctx context.Context, runID string) (*str
 	return textPtr(row.LeaseOwner), row.LeaseEpoch, timePtr(row.LeaseExpiresAt), row.State, nil
 }
 
+func (s *PgWorktreeStore) RenewRunLease(ctx context.Context, runID, owner string, epoch int64, expiresAt time.Time) (time.Time, error) {
+	runUUID, err := uuidFromString(runID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: run %s", application.ErrWorktreeLeaseLost, runID)
+	}
+	exp, err := s.queries.RenewRunLease(ctx, db.RenewRunLeaseParams{
+		RunID:          runUUID,
+		LeaseOwner:     textFromOptional(owner),
+		LeaseExpiresAt: pgtype.Timestamptz{Time: expiresAt.UTC(), Valid: true},
+		LeaseEpoch:     epoch,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, fmt.Errorf("%w: run %s epoch %d", application.ErrWorktreeLeaseLost, runID, epoch)
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("renew run lease: %w", err)
+	}
+	return exp.Time, nil
+}
+
 func isTerminalState(state string) bool {
 	return state == "completed" || state == "failed" || state == "cancelled"
 }

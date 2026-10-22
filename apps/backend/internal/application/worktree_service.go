@@ -115,6 +115,18 @@ func (s *WorktreeService) AllocateWorktree(ctx context.Context, cmd AllocateComm
 // LeaseExpiry is the TTL callers use to schedule renewals.
 func (s *WorktreeService) LeaseExpiry() time.Duration { return s.leaseTTL }
 
+// RenewLease extends the run's lease for this service's owner and the given
+// fencing epoch. The execution activity calls it before expiry; a stale epoch
+// or already-expired lease returns ErrWorktreeLeaseLost so the caller can stop
+// touching the worktree instead of racing the reconciler.
+func (s *WorktreeService) RenewLease(ctx context.Context, runID string, epoch int64) (time.Time, error) {
+	expires, err := s.store.RenewRunLease(ctx, runID, s.owner, epoch, s.clock.Now().Add(s.leaseTTL))
+	if err != nil {
+		return time.Time{}, err
+	}
+	return expires, nil
+}
+
 // ReleaseWorktree runs the cleanup path for one run (run finished or its lease
 // was revoked). Dirt of any kind quarantines; only clean worktrees are removed.
 func (s *WorktreeService) ReleaseWorktree(ctx context.Context, runID, reason string) (WorktreeView, error) {
