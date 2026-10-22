@@ -75,6 +75,13 @@ worktree lifecycle service (migration `00005_worktrees.sql`).
 - Quarantined dirs are never auto-deleted; operators inspect and remove
   manually.
 - `worktrees` rows are kept after release (history), like `task_run_events`.
+- **Platform support:** the backend targets unix (Linux/macOS in CI and
+  deployment). The repo-cache lock is per-GOOS (`internal/gitops/lock_unix.go`
+  → `flock`, `lock_windows.go` → `LockFileEx`), so `internal/gitops` compiles
+  everywhere; `internal/agent` process-group supervision (`Setpgid`, signal
+  `-pgid`) is unix-only by build constraint — `GOOS=windows go build ./...`
+  succeeds only because nothing imports that package yet. A Windows agent
+  supervisor needs a Job-Object port, not a syscall shim.
 
 ## Handoff
 

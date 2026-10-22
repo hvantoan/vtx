@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -127,8 +126,9 @@ func (g Git) EnsureRepoCache(ctx context.Context, layout Layout, repoURL string)
 }
 
 // lockRepoCache takes an exclusive advisory lock on <root>/.locks/<key>.lock
-// and returns the release func. flock gives mutual exclusion across worker
-// PROCESSES (an in-process mutex cannot); the lock lives in a separate dir so
+// and returns the release func. An OS-level file lock gives mutual exclusion
+// across worker PROCESSES (an in-process mutex cannot); the lock primitive is
+// per-GOOS (flock on unix, LockFileEx on Windows — see lock_*.go). the lock lives in a separate dir so
 // deleting the cache dir never unlinks the file peers are waiting on. The
 // acquire polls LOCK_NB so a cancelled allocation does not wait out a slow
 // first clone.
@@ -142,11 +142,11 @@ func lockRepoCache(ctx context.Context, root, key string) (func(), error) {
 		return nil, fmt.Errorf("open repo cache lock: %w", err)
 	}
 	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err := tryLockExclusiveNB(f.Fd())
 		switch {
 		case err == nil:
 			return func() { _ = f.Close() }, nil
-		case errors.Is(err, syscall.EWOULDBLOCK):
+		case errors.Is(err, errLockHeld):
 			select {
 			case <-ctx.Done():
 				_ = f.Close()
