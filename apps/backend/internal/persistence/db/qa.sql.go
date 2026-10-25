@@ -16,19 +16,65 @@ SELECT artifact_id, run_id, task_id, attempt, kind, uri, sha256,
     commit_sha, producer, producer_session_id, metadata, created_at
 FROM evidence_artifacts
 WHERE run_id = $1 AND uri = $2 AND sha256 = $3
+  AND commit_sha = $4 AND attempt = $5 AND producer = $6
+  AND producer_session_id IS NOT DISTINCT FROM $7::text
 LIMIT 1
 `
 
 type FindEvidenceArtifactByContentParams struct {
-	RunID  pgtype.UUID `json:"run_id"`
-	Uri    string      `json:"uri"`
-	Sha256 string      `json:"sha256"`
+	RunID     pgtype.UUID `json:"run_id"`
+	Uri       string      `json:"uri"`
+	Sha256    string      `json:"sha256"`
+	CommitSha string      `json:"commit_sha"`
+	Attempt   int32       `json:"attempt"`
+	Producer  string      `json:"producer"`
+	SessionID pgtype.Text `json:"session_id"`
 }
 
 // Upload idempotency: (uri, sha256) content dedupe — a re-upload of identical
 // content returns the existing row.
 func (q *Queries) FindEvidenceArtifactByContent(ctx context.Context, arg FindEvidenceArtifactByContentParams) (EvidenceArtifact, error) {
-	row := q.db.QueryRow(ctx, findEvidenceArtifactByContent, arg.RunID, arg.Uri, arg.Sha256)
+	row := q.db.QueryRow(ctx, findEvidenceArtifactByContent,
+		arg.RunID,
+		arg.Uri,
+		arg.Sha256,
+		arg.CommitSha,
+		arg.Attempt,
+		arg.Producer,
+		arg.SessionID,
+	)
+	var i EvidenceArtifact
+	err := row.Scan(
+		&i.ArtifactID,
+		&i.RunID,
+		&i.TaskID,
+		&i.Attempt,
+		&i.Kind,
+		&i.Uri,
+		&i.Sha256,
+		&i.CommitSha,
+		&i.Producer,
+		&i.ProducerSessionID,
+		&i.Metadata,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getQASessionArtifact = `-- name: GetQASessionArtifact :one
+SELECT artifact_id, run_id, task_id, attempt, kind, uri, sha256, commit_sha, producer, producer_session_id, metadata, created_at FROM evidence_artifacts
+WHERE run_id = $1 AND attempt = $2 AND kind = 'qa_review'
+  AND producer = 'system' AND uri = 'qa-session'
+ORDER BY created_at DESC LIMIT 1
+`
+
+type GetQASessionArtifactParams struct {
+	RunID   pgtype.UUID `json:"run_id"`
+	Attempt int32       `json:"attempt"`
+}
+
+func (q *Queries) GetQASessionArtifact(ctx context.Context, arg GetQASessionArtifactParams) (EvidenceArtifact, error) {
+	row := q.db.QueryRow(ctx, getQASessionArtifact, arg.RunID, arg.Attempt)
 	var i EvidenceArtifact
 	err := row.Scan(
 		&i.ArtifactID,

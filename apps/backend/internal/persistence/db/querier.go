@@ -41,10 +41,11 @@ type Querier interface {
 	FindEvidenceArtifactByContent(ctx context.Context, arg FindEvidenceArtifactByContentParams) (EvidenceArtifact, error)
 	// Terminal transition for a 'running' row ONLY. 0 rows means a reconciler or
 	// a fence already moved it — the caller treats that as lease/crash loss.
-	FinishVerificationRun(ctx context.Context, arg FinishVerificationRunParams) (FinishVerificationRunRow, error)
+	FinishVerificationRun(ctx context.Context, arg FinishVerificationRunParams) (VerificationRun, error)
 	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
 	GetOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (GetOutboxEventRow, error)
+	GetQASessionArtifact(ctx context.Context, arg GetQASessionArtifactParams) (EvidenceArtifact, error)
 	GetQAVerdict(ctx context.Context, arg GetQAVerdictParams) (QaVerdict, error)
 	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
 	// Lightweight lease read for fencing checks that do not need the whole row.
@@ -61,9 +62,9 @@ type Querier interface {
 	// committer wins, every other writer blocks here, then reads the NEW version
 	// and is classified as stale_version.
 	GetTaskRunForUpdate(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
-	GetVerificationRun(ctx context.Context, arg GetVerificationRunParams) (GetVerificationRunRow, error)
+	GetVerificationRun(ctx context.Context, arg GetVerificationRunParams) (VerificationRun, error)
 	// The gate/QA lookup: "does a full suite set exist at THIS sha".
-	GetVerificationSuiteSetAtSHA(ctx context.Context, arg GetVerificationSuiteSetAtSHAParams) ([]GetVerificationSuiteSetAtSHARow, error)
+	GetVerificationSuiteSetAtSHA(ctx context.Context, arg GetVerificationSuiteSetAtSHAParams) ([]VerificationRun, error)
 	GetWorktreeByRun(ctx context.Context, runID pgtype.UUID) (Worktree, error)
 	// I-03 read side: the partial unique index is the enforcement, this is the
 	// branch selector for admit-vs-defer.
@@ -105,7 +106,7 @@ type Querier interface {
 	// One row per (run_id, attempt, suite). ON CONFLICT DO NOTHING makes a replay
 	// of the same attempt idempotent: no row is returned and the caller re-reads
 	// the existing row via GetVerificationRun instead of double-writing.
-	InsertVerificationRun(ctx context.Context, arg InsertVerificationRunParams) (InsertVerificationRunRow, error)
+	InsertVerificationRun(ctx context.Context, arg InsertVerificationRunParams) (VerificationRun, error)
 	// Append-only audit row for every authenticated webhook request. Written
 	// AFTER processing settles (best-effort, outside the acceptance tx) — a
 	// failure here logs an error and never changes the HTTP response.
@@ -137,13 +138,13 @@ type Querier interface {
 	// no-op for the loser — no claim column needed.
 	ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]ListRetryWaitRunsDueRow, error)
 	// Crash reconcile sweep: rows stuck 'running' whose starter is presumed dead.
-	ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]ListStaleRunningVerificationRow, error)
+	ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]VerificationRun, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	// Cursor on version, and the creation audit (version 0) must be reachable:
 	// a NULL cursor means "from the beginning", not "after 0".
 	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
-	ListVerificationRuns(ctx context.Context, runID pgtype.UUID) ([]ListVerificationRunsRow, error)
+	ListVerificationRuns(ctx context.Context, runID pgtype.UUID) ([]VerificationRun, error)
 	// Serialize deliveries that refer to the same intent, even when they carry
 	// different source event IDs. The intent row is created before its outbox
 	// event, so a missing row is a payload contract fault.

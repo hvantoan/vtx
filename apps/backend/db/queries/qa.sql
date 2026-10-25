@@ -18,6 +18,8 @@ SELECT artifact_id, run_id, task_id, attempt, kind, uri, sha256,
     commit_sha, producer, producer_session_id, metadata, created_at
 FROM evidence_artifacts
 WHERE run_id = $1 AND uri = $2 AND sha256 = $3
+  AND commit_sha = $4 AND attempt = $5 AND producer = $6
+  AND producer_session_id IS NOT DISTINCT FROM sqlc.narg('session_id')::text
 LIMIT 1;
 
 -- name: ListEvidenceByIDs :many
@@ -79,3 +81,9 @@ FROM task_run_events
 WHERE run_id = $1 AND metadata ? sqlc.arg('meta_key')::text
 ORDER BY version DESC
 LIMIT 1;
+
+-- name: GetQASessionArtifact :one
+SELECT * FROM evidence_artifacts
+WHERE run_id = $1 AND attempt = $2 AND kind = 'qa_review'
+  AND producer = 'system' AND uri = 'qa-session'
+ORDER BY created_at DESC LIMIT 1;
