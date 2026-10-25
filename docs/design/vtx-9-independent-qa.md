@@ -69,12 +69,12 @@ cross-referenced rather than duplicated.
 
 ---
 
-## 3. Data Model / DDL Deltas (migrations 00006+)
+## 3. Data Model / DDL Deltas (migration 00009)
 
 All deltas are additive (OD-02 discipline: no DROP, no bootstrap-data rewrite).
 
 ```sql
--- 00006_qa_evidence.sql — evidence + verdicts for VTX-9.
+-- 00009_qa.sql — evidence + verdicts for VTX-9.
 
 -- Immutable evidence artifact. `commit_sha` is the SHA the artifact was
 -- produced against — the binding that makes FR-QA-003 enforceable.
@@ -222,6 +222,9 @@ type SubmitVerdictCommand struct {
     Verdict         domain.QAVerdict
     Findings        []domain.QAFinding
     EvidenceIDs     []string // must already exist as evidence_artifacts rows
+    // Producers (VTX-8 verifier, the QA agent itself) write artifact rows via
+    // QAStore.RecordEvidence INSIDE their own write tx — the ingestion path is
+    // service-level in MVP (all producers in-process); no HTTP endpoint.
     QASessionID     string  // from the AgentRunner session
     QAIdentity      string  // authenticated principal, e.g. "qa-agent"
     CodingSessionID string  // snapshot recorded at launch

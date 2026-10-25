@@ -26,7 +26,7 @@ Scope boundary: the dashboard **reads** registry/worktree/PR data through typed 
 | SRS ID | Requirement (paraphrased) | Design decision |
 |---|---|---|
 | FR-UI-001 | Issue/run state, stage progress, worker health, dependency readiness — measured, not hardcoded | Read endpoints §4.3: `GET /operator/overview` (state histogram, deferred count, admission slots 0–3 from `task_runs`), `GET /operator/workers` (`worker_heartbeats` staleness = 3×beat), `/ready` extended with a real `outbox` dependency probe (lag measured via `OutboxLag`). Stage progress derived from `state` position in the §5 chain (§5.3). |
-| FR-UI-002 | Run timeline, event/audit history, commit SHA, CI/QA evidence, PR link, error disposition | `GET /operator/runs/{run_id}` aggregates: run (sha/branch/error fields), `task_run_events` timeline (existing registry events endpoint), worktree, `pull_requests` + `ci_status`, `gate_verdicts.evidence`, last `error_code`/`error_message`. UI `RunDetailPage` §6.2. |
+| FR-UI-002 | Run timeline, event/audit history, commit SHA, CI/QA evidence, PR link, error disposition | `GET /operator/runs/{run_id}` aggregates: run (sha/branch/error fields), `task_run_events` timeline (existing registry events endpoint), worktree, `pull_requests` + `ci_status`, `gate_decisions.evidence`, last `error_code`/`error_message`. UI `RunDetailPage` §6.2. |
 | FR-UI-003 | Operator mutations need authenticated principal + authorization; audit actor/reason/correlation | Mutations = existing `transitions` endpoint (operator actor token, `actor_type=human` audit) + new `POST /operator/outbox/dlq/{id}/redrive` and `POST /pull_requests/{run_id}/sync`, all under `RegistryActorMiddleware` restricted to `operator` (+`policy` for sync). `X-Operator-Id` header carried into audit metadata; `operator_audit_log` table §3. |
 | FR-UI-004 | SSE/stream via Authorization header or session; never token in query string | Existing `GET /api/v1/events` keeps Bearer auth (§4.5). Server-side guard: request carrying `token`/`access_token`/`auth` query params is rejected 401 `credential_in_query`. `run_id` filter and `Last-Event-ID` are the only new query/header inputs — neither is a credential. |
 | §7 Registry API | Read task/run/history + authorized mutation, typed errors 401/403/404/409 | Dashboard consumes the existing `/api/v1/registry/*` surface for timeline/mutations; new `/api/v1/operator/*` surface reuses the same middleware and error envelope (`ErrorResponse`), same status semantics (§4.6). |
@@ -37,15 +37,15 @@ Scope boundary: the dashboard **reads** registry/worktree/PR data through typed 
 | NFR-PRIV-001 | Private-network dashboard option; secrets out of source | Operator token supplied via env (`REGISTRY_ACTOR_OPERATOR_TOKEN`, existing); the web app calls the API with a configured bearer — MVP pattern documented §8 D3; no secrets committed (Next.js only receives non-secret config values). |
 | NFR-AUD-001 | Traceable issue→intent→run→SHA→PR; no token/raw payload in logs | Run detail view joins exactly that chain: `registry_tasks` → `execution_intents`/`task_runs` → `commit_sha`/`branch` → `pull_requests`. `X-Operator-Id` is a display identifier, not a credential. |
 | NFR-CON-001 | 20+ concurrent writers, exactly one commits | Dashboard mutations go through `TransitionRun` (existing CAS); the UI always sends `expected_version` from the freshest `GET` and surfaces `stale_version` 409s as "refresh and retry" — it never retries mutations automatically (§6.4). |
-| E2E-03/06/07 | Crash recovery visibility; admission ≤3 visible; operator actions + DLQ redrive per policy + audit | Tests UI-10/11/13 (§7): heartbeats mark crashed worker `down`; overview counts `queued`/`deferred` against the 3-slot admission invariant read from live `task_runs`; redrive writes `operator_audit_log` + clears `dead_lettered_at`. |
+| E2E-03/06/07 | Crash recovery visibility; admission ≤3 visible; operator actions + DLQ redrive per policy + audit | Tests UI-10/11/13 (§7): heartbeats mark crashed worker `down`; overview counts `queued`/`deferred` against the 3-slot admission invariant read from live `task_runs`; redrive writes `operator_audit_log` + `delivery_redrives` row + `outbox.delivery_redriven.v1` + clears `dead_lettered_at`. |
 | OD-03 | Multi-consumer ACK semantics undecided | Dashboard SSE does **not** consume/ACK outbox events — read-only tailer §4.5 D1 sidesteps OD-03 entirely. |
 | OD-06 | SLO/quota params TBD | Poll cadences + heartbeat intervals are config (§4.7), not hardcoded; thresholds flagged where numbers are placeholders pending stakeholder baseline. |
 
 ---
 
-## 3. Data Model / DDL Deltas (future migration `00007_operator_dashboard.sql`)
+## 3. Data Model / DDL Deltas (future migration `00013_ops.sql` (shared with vtx-11 retry ops))
 
-Additive only. Lands after `00006_draft_pr.sql` (vtx-12 spec); the `outbox_events.redrive_count` column is already declared there with `IF NOT EXISTS` — whichever migration merges first owns it.
+Additive only. Lands after `00012_draft_pr.sql` (vtx-12 spec); the `outbox_events.redrive_count` column is already declared there with `IF NOT EXISTS` — whichever migration merges first owns it.
 
 ```sql
 -- Worker liveness, MEASURED not polled-from-nowhere (FR-UI-001). Each loop
@@ -55,7 +55,7 @@ Additive only. Lands after `00006_draft_pr.sql` (vtx-12 spec); the `outbox_event
 CREATE TABLE IF NOT EXISTS worker_heartbeats (
     worker_id TEXT NOT NULL,
     worker_kind TEXT NOT NULL CHECK (worker_kind IN
-        ('temporal', 'dispatcher', 'scheduler', 'agent_runtime')),
+        ('temporal', 'dispatcher', 'scheduler', 'agent_host')),
     queue TEXT,
     started_at TIMESTAMPTZ NOT NULL,
     last_beat_at TIMESTAMPTZ NOT NULL,
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS operator_audit_log (
 CREATE INDEX IF NOT EXISTS idx_operator_audit_target
     ON operator_audit_log (target_type, target_id, created_at DESC);
 
--- Redrive bookkeeping (also declared in 00006 — keep IF NOT EXISTS here).
+-- Redrive bookkeeping (also declared in 00012 — keep IF NOT EXISTS here).
 ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS redrive_count INT NOT NULL DEFAULT 0;
 
 -- Dashboard list queries: state histogram + recency scans hit these.
@@ -178,7 +178,7 @@ Same envelope `{"error","message"}` + same codes family as registry: `unauthoriz
 
 ### 4.7 Config additions (`ValidateOperator()`)
 
-`SSE_TAIL_INTERVAL` (2s), `SSE_TAIL_BATCH` (200), `WORKER_HEARTBEAT_INTERVAL` (10s), `WORKER_STALE_FACTOR` (3 ⇒ down after 30s), `READY_OUTBOX_LAG_WARN` (5m ⇒ `degraded`), `OPERATOR_PAGE_MAX` (200, matching registry `maxPageLimit`), `DASHBOARD_API_TOKEN` — see §8 D3. All are env-backed with dev defaults; production values pending OD-06 baseline.
+`SSE_TAIL_INTERVAL` (2s), `SSE_TAIL_BATCH` (200), `WORKER_HEARTBEAT_INTERVAL` (15s, canonical per vtx-5 §4.4), `WORKER_STALE_FACTOR` (3 ⇒ down after 45s), `READY_OUTBOX_LAG_WARN` (5m ⇒ `degraded`), `OPERATOR_PAGE_MAX` (200, matching registry `maxPageLimit`), `DASHBOARD_API_TOKEN` — see §8 D3. All are env-backed with dev defaults; production values pending OD-06 baseline.
 
 ---
 
@@ -229,7 +229,7 @@ Pure function of `task_run_events` + current `state` — nothing stored, so it c
 - `RunStateBadge` — `MetricBadge` variant map for the 12 states; label always present (never color-only).
 - `StageProgressBar` — 6-segment linear rail (preparing→pr_draft) + completed cap; parked/terminal overlays; `tabular-nums` percent.
 - `RunTimeline` — `role="log"` ordered list of `task_run_events` ascending by `version` (the audit cursor), showing action/actor/actor_type/state transition/reason from metadata; human actions (`actor_type='human'`) get the `operator_id` sub-label.
-- `EvidencePanel` — commit SHA (mono, copyable), branch, `gate_verdicts` verdict + policy + evidence JSON (collapsed), `pull_requests` card (PR number, draft badge, `ci_status` MetricBadge, `pr_url` external link).
+- `EvidencePanel` — commit SHA (mono, copyable), branch, `gate_decisions` verdict + policy + evidence JSON (collapsed), `pull_requests` card (PR number, draft badge, `ci_status` MetricBadge, `pr_url` external link).
 - `ErrorDispositionCard` — `error_code`/`error_message` + `retry_due_at` + `attempt` + last failed transition from timeline.
 - `OperatorActions` — `<button>`s opening a confirm dialog with mandatory `reason` field (≥3 chars); posts `expected_version` from the loaded run; 409 `stale_version` ⇒ toast "run changed — refresh" + auto-refetch.
 - `OutboxPanel`/`DlqTable`/`RedriveConfirm` — per-type lag numbers, DLQ rows with reason, redrive requires reason; result surfaces `operator_audit_log`-backed confirmation.
@@ -271,7 +271,7 @@ Evidence band: **VTX-13** — "Operational dashboard, authenticated controls, re
 | UI-14 | FE unit: `RunStateBadge` covers all 12 states → label+variant; `StageProgressBar` mapping for each state incl. blocked/retry_wait overlay | vitest | FR-UI-001 |
 | UI-15 | FE: mutation dialog requires reason; 409 shows refresh path; no auto-retry of mutation | vitest + RTL | FR-UI-003, NFR-CON-001 |
 | UI-16 | FE: SSE client never appends credentials to URL (regression guard); reconnect sends `Last-Event-ID` | vitest | FR-UI-004 |
-| UI-17 | Migration 00007 up/down on populated DB; `redrive_count` survives whichever migration owns it | migration test | NFR-REL-001 |
+| UI-17 | Migration 00013 up/down on populated DB; `redrive_count` survives whichever migration owns it | migration test | NFR-REL-001 |
 | UI-18 | No token/secret material in any response payload or audit row (grep-style assertion over response bodies in integ tests) | HTTP integ | NFR-SEC-001, NFR-AUD-001 |
 
 ---

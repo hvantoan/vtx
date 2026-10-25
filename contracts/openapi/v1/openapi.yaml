@@ -1192,7 +1192,7 @@ components:
         pull_request:
           $ref: '#/components/schemas/PullRequest'
           nullable: true
-        gate_verdict:
+        gate_decision:
           type: object
           nullable: true
           properties:

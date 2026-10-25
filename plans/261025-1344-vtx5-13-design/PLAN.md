@@ -36,3 +36,16 @@ Run E2E-01..07 per SRS §9.2; store evidence in `tests/evidence/`; unverifiable 
 
 ## Progress log
 - 2026-10-25 13:4x — Plan written; Phase 1 lanes launching.
+- 13:55 — Lanes B/C/D delivered 7 specs + 2 contract drafts; lane-a truncated w/o files.
+- 14:0x — Fix-up workflow: lane-d2 truncated again (no openapi draft); lane-a2 stopped (token burn, 0 files). Coordinator wrote vtx-5/6 specs + vtx5-6-events.json + vtx12-13-openapi.yaml directly.
+- 14:1x — Merged: events.json (15 types/defs), openapi.yaml (+11 paths, 7 schemas), agent-ipc.json v1.1. Committed `fb738c4`. Reviewer coverage audit dispatched.
+- Pending: reviewer gap report → fix gaps → close design-specs → VTX-5 implementation lane.
+
+## Canonical migration map (reconciled 2026-10-25 after reviewer audit)
+00006_requirements.sql (VTX-6 run_requirements) · 00007_agent_runtime.sql (VTX-7 agent_sessions/events) · 00008_verification.sql (VTX-8 verification_runs) · 00009_qa.sql (VTX-9 evidence_artifacts/qa_verdicts) · 00010_quality_gate.sql (VTX-10 gate_decisions) · 00011_scheduler.sql (VTX-5 worker_heartbeats) · 00012_draft_pr.sql (VTX-12 pull_requests + task_runs.pr_url) · 00013_ops.sql (VTX-11 delivery_redrives + VTX-13 operator_audit_log)
+
+## Reviewer audit fixes applied
+- gate_verdicts → unified on VTX-10 `gate_decisions` (vtx-12/13 + openapi).
+- worker_heartbeats DDL unified (composite PK, run_id+queue+active_runs); heartbeat cadence 15s canonical.
+- verification_runs: +`kind` (baseline|verification), `commit_sha`→`subject_commit_sha`; vtx-8 emits `evidence_artifacts(test_results)` for gate C3; `run.evidence_invalidated.v1` owner = commit-recording path.
+- vtx-9: QAStore.RecordEvidence ingestion path; vtx-11: redrive endpoint unified to /api/v1/operator/outbox/dlq/{id}/redrive; runbook mermaid `advance` fix.

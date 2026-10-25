@@ -38,7 +38,7 @@ Non-goals: scheduler/admission (VTX-5), worktree lifecycle (VTX-4 — VTX-7 cons
 | NFR-PERF-001 / NFR-AVAIL-001 | SLO/RPO/RTO TBD | No thresholds invented here; design only notes measurement points (spawn latency, event throughput, time-to-kill) for the future baseline. |
 | §7 Agent IPC | JSON-RPC 2.0 stdio, streaming, cancellation | Realized as contract v1.1 — see `contract-drafts/vtx7-8-agent-ipc.md` (full method list, lifecycle, error codes, negotiation). |
 
-## 3. Data model / DDL deltas (future `00006_agent_sessions.sql`)
+## 3. Data model / DDL deltas (future `00007_agent_runtime.sql`)
 
 Goose, additive-only, mirrors 00004/00005 conventions. `attempt` aligns with `task_runs.attempt` (incremented per retry).
 

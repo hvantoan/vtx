@@ -30,7 +30,7 @@ stateDiagram-v2
   coding --> verifying: advance
   verifying --> qa: advance
   qa --> quality_gate: advance
-  quality_gate --> pr_draft: complete
+  quality_gate --> pr_draft: advance
   pr_draft --> completed: complete
   queued --> blocked: block
   preparing --> blocked: block

@@ -14,7 +14,7 @@ VTX-12 closes the autonomous pipeline: after the deterministic Quality Gate (VTX
 
 Hard invariants (all derived from SRS, restated here because they constrain every design choice):
 
-1. **No PR without gate PASS.** The `advance` hop `quality_gate → pr_draft` is *PASS-gated* (SRS §5). The guard is a persisted `gate_verdicts` row for `(run_id, commit_sha)`, not a flag in a request body.
+1. **No PR without gate PASS.** The `advance` hop `quality_gate → pr_draft` is *PASS-gated* (SRS §5). The guard is a persisted `gate_decisions` row for `(run_id, commit_sha)`, not a flag in a request body.
 2. **Exact-SHA binding (FR-QA-003).** Evidence evaluated SHA `X`; the PR must publish SHA `X`. If the remote head moved, the verdict is stale and the PR must not be created.
 3. **Draft only, never merge.** There is no merge code path anywhere in VTX-12. `draft` is not an input — it is a constant `true`.
 4. **At most one PR per run, no duplicate PRs** (E2E-02): dedupe on both the DB side (`UNIQUE(run_id)`) and the GitHub side (list-before-create + adoption).
@@ -30,7 +30,7 @@ quality_gate (gate wrote verdict=pass for run+sha)
    │  [3] verify remote: repo exists, base ref exists,           → else abort
    │      remote head(branch) == run.commit_sha                  → else abort
    │  [4] advance run quality_gate → pr_draft (lease-gated,
-   │      metadata: gate_verdict_id, expected sha)
+   │      metadata: gate_decision_id, expected sha)
    │  [5] dedupe: pull_requests row? adopt open PR for head?
    │  [6] POST /repos/{o}/{r}/pulls {draft:true}                 → GitHub call
    │  [7] tx: insert pull_requests + task_runs.pr_url +
@@ -50,19 +50,19 @@ Steps [4], [7], [8] are three separate transactions on purpose: the GitHub call 
 
 | SRS ID | Requirement (paraphrased) | Design decision |
 |---|---|---|
-| FR-PR-001 | Draft PR only after gate PASS; no auto merge/deploy | §4.3 `PRService.OpenDraftPR` requires a persisted `gate_verdicts` PASS row for the run's exact SHA before the `advance` transition is attempted; `GitHubPort` exposes no merge mutation; `draft` is a hardcoded `true`, not a parameter (§4.1, §6.4). |
-| FR-QA-002 | Gate PASS only from required conditions, not an LLM comment | VTX-12 does not trust a caller's claim: it reads `gate_verdicts` (written only by the gate implementation identity) and refuses if absent/mismatched (§3 `gate_verdicts`, §5.2 guard). |
-| FR-QA-003 | SHA changed after QA ⇒ evidence invalid | Two checks: (a) `gate_verdicts.commit_sha == task_runs.commit_sha` at transition time; (b) remote `heads/{branch}` SHA == `commit_sha` at PR-create time. Either mismatch ⇒ `gate_verdict_stale` / `head_sha_mismatch`, no PR, run parked `blocked` (§6.3). |
+| FR-PR-001 | Draft PR only after gate PASS; no auto merge/deploy | §4.3 `PRService.OpenDraftPR` requires a persisted `gate_decisions` PASS row for the run's exact SHA before the `advance` transition is attempted; `GitHubPort` exposes no merge mutation; `draft` is a hardcoded `true`, not a parameter (§4.1, §6.4). |
+| FR-QA-002 | Gate PASS only from required conditions, not an LLM comment | VTX-12 does not trust a caller's claim: it reads `gate_decisions` (written only by the gate implementation identity) and refuses if absent/mismatched (§3 `gate_decisions`, §5.2 guard). |
+| FR-QA-003 | SHA changed after QA ⇒ evidence invalid | Two checks: (a) `gate_decisions.commit_sha == task_runs.commit_sha` at transition time; (b) remote `heads/{branch}` SHA == `commit_sha` at PR-create time. Either mismatch ⇒ `gate_decision_stale` / `head_sha_mismatch`, no PR, run parked `blocked` (§6.3). |
 | FR-ERR-001 | Bounded retry, terminal failure with evidence | Error taxonomy §6.2 splits retryable GitHub faults (rate limit, 5xx, network) from permanent ones (evidence/config). Retry budget `PR_MAX_ATTEMPTS=5`, exp backoff honoring `Retry-After`; exhaustion ⇒ `fail` transition with `error_code` + `pull_requests.status='failed'` + audit (§6.5). |
 | FR-REG-005 | TransitionRun: actor auth, version CAS, lease fencing, atomic state+audit+outbox | VTX-12 mutates run state **only** through the existing `POST /registry/runs/{id}/transitions` / `RegistryTransitioner` surface as actor `orchestrator` with `expected_version` + `expected_lease_epoch`. No direct `task_runs` writes except the additive `pr_url` column write inside the same tx as `pull_requests` insert (§3, §5). |
 | FR-REG-006 / §5 | States `quality_gate`, `pr_draft`, `completed`; blocked/retry_wait resumable | VTX-12 flips `operational=true` on the two existing contract rows `quality_gate --advance--> pr_draft` and `pr_draft --complete--> completed` (currently `ErrStageNotOperational`), and adds the evidence precondition outside the state table (§5.2). No new states, no new actions. |
 | FR-REG-007 | Unimplemented downstream stages must not fake success | The `operational` flag flip only happens together with the real PR implementation; the `stage_not_operational` path remains for any caller that reaches the hop without VTX-12 evidence (§5.2, OD-05). |
 | §7 GitHub API | Repo/ref/commit checks, draft PR, CI run/required status | `GitHubPort` §4.2: `GetRepo`, `GetRefSHA` (base + head), `GetCommit`, `ListOpenPRsForHead`, `CreateDraftPR`, `GetPR`, `GetCheckRollup`. CI rollup persisted via `pull_requests.ci_status` through `SyncPullRequest` (§4.4). |
 | §6 outbox | Versioned payloads | New `pull_request.opened.v1` outbox event written in the same tx as the `pull_requests` row (§3, §4.3). |
-| NFR-AUD-001 | issue→intent→run→SHA→PR traceability; no tokens in logs | `pull_requests.run_id` + `task_runs.pr_url` give one-hop joins; audit metadata on the `advance`/`complete` transitions carries `gate_verdict_id`, `pr_url`, `pr_number`. GitHub token lives in env only, never logged/serialized (§6.6). |
+| NFR-AUD-001 | issue→intent→run→SHA→PR traceability; no tokens in logs | `pull_requests.run_id` + `task_runs.pr_url` give one-hop joins; audit metadata on the `advance`/`complete` transitions carries `gate_decision_id`, `pr_url`, `pr_number`. GitHub token lives in env only, never logged/serialized (§6.6). |
 | NFR-REL-001 | No lost intent; replay safe; fault injection | Crash-recovery §6.5: pre-GitHub crash replays cleanly; post-GitHub/pre-DB crash is healed by `ListOpenPRsForHead` adoption; `UNIQUE(run_id)` caps records at one. |
 | NFR-SEC-001 | TLS, secret redaction, least privilege | GitHub client is HTTPS-only (configurable base for GHES, `https://` enforced); PAT/fine-grained token scoped `pull_requests:write, contents:read, checks:read` on the single repo (§4.2, §6.6). |
-| NFR-MAINT-001 | Deterministic migrations, sqlc, contract conformance | Migration 00006 is additive-only Goose SQL; new queries live in `db/queries/pullrequests.sql`; OpenAPI delta in `docs/design/contract-drafts/vtx12-13-openapi.yaml` (§7). |
+| NFR-MAINT-001 | Deterministic migrations, sqlc, contract conformance | Migration 00012 is additive-only Goose SQL; new queries live in `db/queries/pullrequests.sql`; OpenAPI delta in `docs/design/contract-drafts/vtx12-13-openapi.yaml` (§7). |
 | UC-05 | Gate PASS → evidence → Draft PR; human review/merge separate | §1.1 sequence is literally UC-05; the spec ends at `completed` — review/merge is GitHub-side human work. |
 | E2E-01 | …QA PASS → Draft PR | PR-14 integration test (§7). |
 | E2E-02 | no duplicate PR on replay | PR-05/PR-06 (§7): `UNIQUE(run_id)` + adoption path. |
@@ -72,28 +72,16 @@ Steps [4], [7], [8] are three separate transactions on purpose: the GitHub call 
 
 ---
 
-## 3. Data Model / DDL Deltas (future migration `00006_draft_pr.sql`)
+## 3. Data Model / DDL Deltas (future migration `00012_draft_pr.sql`)
 
-Additive only (FR-REG-009): no drops, no renames. Two new tables + one additive column + one additive outbox event type. `gate_verdicts` is the **evidence contract VTX-12 reads**; the writer is the VTX-10 gate implementation — if the VTX-10 lane lands a differently-named table, VTX-12's `GateEvidenceReader` port adapts to it, the read contract (run, sha, verdict, policy) does not change.
+Additive only (FR-REG-009): no drops, no renames. Two new tables + one additive column + one additive outbox event type. `gate_decisions` is the **evidence contract VTX-12 reads**; the writer is the VTX-10 gate implementation — if the VTX-10 lane lands a differently-named table, VTX-12's `GateEvidenceReader` port adapts to it, the read contract (run, sha, verdict, policy) does not change.
 
 ```sql
 -- +goose Up
--- Written by the Quality Gate implementation (VTX-10), read by VTX-12.
--- One verdict per (run, sha): re-running the gate on the same SHA upserts;
--- a new SHA is a new row, so stale evidence can never be overwritten in
--- place — it is simply absent for the new SHA.
-CREATE TABLE IF NOT EXISTS gate_verdicts (
-    verdict_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    run_id UUID NOT NULL REFERENCES task_runs(run_id) ON DELETE CASCADE,
-    commit_sha TEXT NOT NULL,
-    policy_version TEXT NOT NULL,          -- gate policy identifier, e.g. "gate-policy/v1"
-    verdict TEXT NOT NULL CHECK (verdict IN ('pass', 'fail')),
-    evidence JSONB NOT NULL,               -- check ids, QA report refs, test summary — audit payload
-    decided_by TEXT NOT NULL,              -- gate implementation / actor identity
-    decided_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT gate_verdicts_run_sha_unique UNIQUE (run_id, commit_sha)
-);
-CREATE INDEX IF NOT EXISTS idx_gate_verdicts_run ON gate_verdicts (run_id, decided_at DESC);
+-- VTX-12 does NOT define its own verdict store. It reads `gate_decisions`
+-- (append-only, VTX-10 section 3): the effective PASS is the latest
+-- evaluated_at row whose decision='pass' for (run_id, subject_commit_sha).
+-- Reconciled 2026-10-25: supersedes the earlier local `gate_decisions` draft.
 
 CREATE TABLE IF NOT EXISTS pull_requests (
     pr_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -130,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_pull_requests_status
 ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS pr_url TEXT;
 
 -- Track redrive visibility for ops (see vtx-13-dashboard.md §3).
--- (shared delta: defined here once; if 00006 lands before the dashboard
+-- (shared delta: defined here once; if 00012 lands before the dashboard
 -- migration, the dashboard spec's ALTER is skipped as IF NOT EXISTS)
 ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS redrive_count INT NOT NULL DEFAULT 0;
 ```
@@ -218,7 +206,7 @@ Steps (mirroring §1.1):
 1. Load run (reader). Precondition A: `state == quality_gate`. Precondition B: `GetGateVerdict(run_id, run.commit_sha)` exists, `verdict='pass'`. Else `ErrPRPrecondition{code}` — **no GitHub call made**.
 2. Resolve `owner/repo` from `registry_tasks.repo_url` (parse `https://github.com/{o}/{r}[.git]`); enforce `GITHUB_REPO_ALLOWLIST` when configured; derive `base_branch` from config (`PR_BASE_BRANCH`, default `dev` — same default as `pr_pipeline.py`).
 3. Remote checks: `GetRepo` → `GetRefSHA(base)` → `GetRefSHA(head_branch)` must equal `run.commit_sha`. Mismatch ⇒ `ErrHeadSHAMismatch`.
-4. `TransitionRun(action=advance, expected_version, expected_lease_epoch, metadata={gate_verdict_id, commit_sha})` → run enters `pr_draft`.
+4. `TransitionRun(action=advance, expected_version, expected_lease_epoch, metadata={gate_decision_id, commit_sha})` → run enters `pr_draft`.
 5. Dedupe: `GetPullRequestByRun` → return existing (`idempotent`); else `ListOpenPRsForHead` → adopt if found (insert `pull_requests` with status from GitHub, `draft` verified `true`; a found non-draft PR is adopted but logged as anomaly — the platform still did not merge it).
 6. `CreateDraftPR` (title: `[{issue_key}] {summary}`, body: evidence footer — gate verdict id, SHA, run id, `<!-- vtx-pipeline -->` marker).
 7. One tx: `InsertPullRequest` + `SetRunPrURL` + outbox `pull_request.opened.v1`. **No GitHub call inside the tx.**
@@ -250,7 +238,7 @@ Schemas in the contract draft (`PullRequest`, `CheckRollup`). Mutations of run s
 
 | From | Action | To | Actor | Guard added by VTX-12 |
 |---|---|---|---|---|
-| `quality_gate` | `advance` | `pr_draft` | `orchestrator` | Persisted `gate_verdicts` PASS at `run.commit_sha` (checked by `PRService` before calling `TransitionRun`; `gate_verdict_id` recorded in transition metadata so the audit row is self-describing) |
+| `quality_gate` | `advance` | `pr_draft` | `orchestrator` | Persisted `gate_decisions` PASS at `run.commit_sha` (checked by `PRService` before calling `TransitionRun`; `gate_decision_id` recorded in transition metadata so the audit row is self-describing) |
 | `pr_draft` | `complete` | `completed` | `orchestrator` | Completion policy: `pull_requests.status='open'` row exists for the run |
 
 Both flips (`operational: false → true` in `domain/registry.go transitionTable`) happen **in the VTX-12 implementation commit**, together with the service that enforces the guards — never earlier (OD-05). The state machine itself gains no rows, states, or actions; the evidence precondition is enforced by the calling service so `TransitionRun` stays a pure CAS+lease+auth kernel and remains directly testable.
@@ -261,7 +249,7 @@ Both flips (`operational: false → true` in `domain/registry.go transitionTable
 |---|---|---|
 | Transient GitHub fault, attempts left | `schedule_retry` (policy actor) | `retry_wait` (resume_state=`quality_gate`) |
 | Retry due | `retry_due` (scheduler/policy) | back to `quality_gate` |
-| Permanent evidence fault (`head_sha_mismatch`, `gate_verdict_stale`) | `block` (policy actor) with reason + `error_code` | `blocked` — resumable by operator after re-verification |
+| Permanent evidence fault (`head_sha_mismatch`, `gate_decision_stale`) | `block` (policy actor) with reason + `error_code` | `blocked` — resumable by operator after re-verification |
 | Retry budget exhausted | `fail` (policy actor) | `failed` (terminal), `error_code=pr_retry_exhausted` |
 | Operator stops the run | existing `cancel`/`resume` | unchanged semantics |
 
@@ -284,7 +272,7 @@ All transitions require the orchestrator's unexpired lease + expected epoch (`re
 | code | retryable | cause |
 |---|---|---|
 | `gate_evidence_missing` | no | no verdict row for (run, sha) |
-| `gate_verdict_stale` | no | verdict sha ≠ run sha |
+| `gate_decision_stale` | no | verdict sha ≠ run sha |
 | `head_sha_mismatch` | no | remote head moved post-gate |
 | `repo_not_found` / `repo_forbidden` / `repo_not_allowed` | no | repo/permissions/allowlist |
 | `base_ref_missing` / `head_ref_missing` | no | base branch gone / agent never pushed |
@@ -330,7 +318,7 @@ Evidence band: **VTX-6..12** ("Baseline tests, real agent integration, independe
 |---|---|---|---|
 | PR-01 | No verdict row ⇒ `gate_evidence_missing`, zero GitHub calls (fake transport counter) | unit svc | E2E-04, FR-PR-001 |
 | PR-02 | `verdict='fail'` ⇒ same abort | unit svc | E2E-04 |
-| PR-03 | Verdict sha ≠ run sha ⇒ `gate_verdict_stale`, run `blocked` | unit+domain | E2E-05, FR-QA-003 |
+| PR-03 | Verdict sha ≠ run sha ⇒ `gate_decision_stale`, run `blocked` | unit+domain | E2E-05, FR-QA-003 |
 | PR-04 | Fake remote head ≠ commit_sha ⇒ `head_sha_mismatch`, no create call | unit svc | E2E-05 |
 | PR-05 | `UNIQUE(run_id)` second insert rejected; `OpenDraftPR` returns existing row | pgx integ | E2E-02 |
 | PR-06 | Pre-existing open PR for head ⇒ adopted, `CreateDraftPR` never called | unit svc | E2E-02 |
@@ -339,12 +327,12 @@ Evidence band: **VTX-6..12** ("Baseline tests, real agent integration, independe
 | PR-09 | 422 existing-PR ⇒ adoption path ⇒ success not error | unit svc | E2E-02 |
 | PR-10 | Crash-simulation: inject `pull_requests`-insert failure after fake GitHub 201 ⇒ rerun ⇒ adoption heals | integ | NFR-REL-001 |
 | PR-11 | `advance` with wrong lease epoch ⇒ `stale_lease`; wrong actor ⇒ `forbidden` | existing registry suite + new case | FR-REG-005 |
-| PR-12 | Transition metadata records `gate_verdict_id`; outbox `pull_request.opened.v1` payload parses against `events.json` schema | integ | NFR-AUD-001, §6 |
+| PR-12 | Transition metadata records `gate_decision_id`; outbox `pull_request.opened.v1` payload parses against `events.json` schema | integ | NFR-AUD-001, §6 |
 | PR-13 | `pull_requests.draft` CHECK rejects `false` insert (direct SQL) | pgx integ | FR-PR-001 |
 | PR-14 | Happy path: verdict+matching sha ⇒ `advance` ⇒ draft PR ⇒ row + `pr_url` + event ⇒ `complete` ⇒ `completed` | integ (httptest GitHub) | E2E-01 |
 | PR-15 | `SyncPullRequest` maps check-runs rollup to `ci_status`; human-closed PR ⇒ `status='closed'` observed | unit svc | SRS §7 |
 | PR-16 | API: GET pull_request 404/200, sync endpoint actor-forbidden for scheduler token | HTTP integ | SRS §7 typed errors |
-| PR-17 | Migration 00006 up/down on populated DB (00001–00005 applied + seeded runs) | migration test | FR-REG-009, NFR-REL-001 |
+| PR-17 | Migration 00012 up/down on populated DB (00001–00005 applied + seeded runs) | migration test | FR-REG-009, NFR-REL-001 |
 | PR-18 | Contract lint: openapi delta schemas validate; `pull_request.opened.v1` in `events.json` | CI contract check | NFR-MAINT-001 |
 
 ---
@@ -353,7 +341,7 @@ Evidence band: **VTX-6..12** ("Baseline tests, real agent integration, independe
 
 | # | Decision | Status | Rationale / owner |
 |---|---|---|---|
-| D1 | Evidence contract: `gate_verdicts(run_id, commit_sha, verdict, policy_version, evidence JSONB)` — VTX-10 writes, VTX-12 reads | **DECIDED** | Minimal durable binding for the PASS-gated hop; if VTX-10 ships a different store, only `GateEvidenceReader` adapts. Coordination note for the VTX-10 lane, not a blocker. |
+| D1 | Evidence contract: `gate_decisions(run_id, commit_sha, verdict, policy_version, evidence JSONB)` — VTX-10 writes, VTX-12 reads | **DECIDED** | Minimal durable binding for the PASS-gated hop; if VTX-10 ships a different store, only `GateEvidenceReader` adapts. Coordination note for the VTX-10 lane, not a blocker. |
 | D2 | Two transitions (advance→pr_draft, complete→completed) with the GitHub call *between* them | **DECIDED** | Keeps the external call out of every DB tx; each crash point lands on a resumable or adoptable boundary (§6.5). |
 | D3 | Precondition enforced in `PRService`, not inside `domain.Evaluate` | **DECIDED** | The state kernel stays pure (CAS/lease/auth). Evidence checks need reads the domain layer must not do. OD-05 resolved for this stage only. |
 | D4 | SHA drift ⇒ `block`, not `fail` | **DECIDED** | Drift means "new work needs re-gating", which is resumable by definition; `fail` would falsely signal terminal exhaustion (FR-ERR-001). |

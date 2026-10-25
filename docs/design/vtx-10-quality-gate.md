@@ -60,10 +60,10 @@ binding, and artifact presence.
 
 ---
 
-## 3. Data Model / DDL Deltas (migrations 00006+)
+## 3. Data Model / DDL Deltas (migrations — canonical map in PLAN; this file 00010)
 
 ```sql
--- 00007_quality_gate.sql — deterministic gate decision records.
+-- 00010_quality_gate.sql — deterministic gate decision records.
 
 -- Append-only audit of every gate evaluation. "Effective decision" for a SHA =
 -- latest evaluated_at among rows for (run_id, commit_sha). Multiple rows for

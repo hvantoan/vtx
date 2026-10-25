@@ -38,7 +38,7 @@ Non-goals: the quality-gate decision itself (VTX-10 consumes `verification_runs`
 | FR-SCH-002/003 | Lease + worktree isolation | Runs inside the run's allocated worktree only; path resolved from `worktrees` row and canonicalized — two runs can never share a verification cwd. |
 | NFR-PERF-001 / NFR-AVAIL-001 | TBD | Measurement points only: per-suite `duration_ms`, queue-to-start latency. |
 
-## 3. Data model / DDL deltas (future `00007_verification_runs.sql`)
+## 3. Data model / DDL deltas (future `00008_verification.sql`)
 
 ```sql
 -- +goose Up
@@ -47,12 +47,15 @@ Non-goals: the quality-gate decision itself (VTX-10 consumes `verification_runs`
 -- SHA evaluated. Append-only: retries insert a new attempt; nothing updates a
 -- terminal verdict — only 'running' rows may transition to a terminal status.
 CREATE TABLE IF NOT EXISTS verification_runs (
+    -- kind reconciled with vtx-6 §3: baseline rows run on base_sha before the
+    -- agent; verification rows run on the agent commit.
+    kind TEXT NOT NULL DEFAULT 'verification' CHECK (kind IN ('baseline', 'verification')),
     verification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id      UUID NOT NULL REFERENCES task_runs(run_id) ON DELETE CASCADE,
     attempt     INT  NOT NULL,                    -- verification attempt (>=1), independent of agent attempt
     suite       TEXT NOT NULL,                    -- 'make-test-boundaries' | 'make-vet' | ...
     command     TEXT NOT NULL,                    -- exact argv rendered, e.g. 'make -C <path> test'
-    commit_sha  TEXT NOT NULL,                    -- HEAD at suite start — FR-QA-003 anchor
+    subject_commit_sha  TEXT NOT NULL,                    -- HEAD at suite start — FR-QA-003 anchor
     status      TEXT NOT NULL CHECK (status IN (
         'running','passed','failed','error','timeout','skipped','superseded')),
     exit_code   INT,
@@ -68,7 +71,7 @@ CREATE TABLE IF NOT EXISTS verification_runs (
 );
 -- "Is the full suite set green at this SHA for this run?" — gate lookup.
 CREATE INDEX IF NOT EXISTS idx_verification_runs_sha
-    ON verification_runs (run_id, commit_sha, suite);
+    ON verification_runs (run_id, subject_commit_sha, suite);
 -- Reconcile sweep: rows stuck 'running' whose worker/lease is gone.
 CREATE INDEX IF NOT EXISTS idx_verification_runs_running
     ON verification_runs (status) WHERE status = 'running';
@@ -77,6 +80,14 @@ CREATE INDEX IF NOT EXISTS idx_verification_runs_running
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS verification_runs;
+```
+-- Reconciliation (2026-10-25): after each suite row completes, the service ALSO
+-- inserts `evidence_artifacts(kind='test_results', producer='verifier')` in the
+-- same tx (metadata.status 'all_green' only on full pass) — this is the row
+-- VTX-10 gate condition C3 and the verifying→qa guard read. And whoever
+-- updates `task_runs.commit_sha` (the VTX-7 agent-result recording path) emits
+-- `run.evidence_invalidated.v1` in that same tx when a newer SHA supersedes
+-- evidence bound to an older one — that event now has an owner.
 -- +goose StatementEnd
 ```
 

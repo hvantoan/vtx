@@ -10,7 +10,7 @@ crash-recovery sweeping, and outbox dead-letter handling.
 (00004), the existing `block|schedule_retry|retry_due|resume|fail|cancel`
 verbs (domain `Evaluate`), outbox DLQ columns (00004).
 **Produces:** `internal/retry` package, `failure_class`/`retry_policy_version`
-columns (00008), operator redrive API, audit metadata conventions.
+columns (00013), operator redrive API, audit metadata conventions.
 
 ---
 
@@ -63,10 +63,10 @@ machine, which keeps the §5 contract table intact.
 
 ---
 
-## 3. Data Model / DDL Deltas (migrations 00006+)
+## 3. Data Model / DDL Deltas (migration 00013)
 
 ```sql
--- 00008_retry_orchestration.sql — retry classification + redrive audit.
+-- 00013_ops.sql — retry classification + redrive audit.
 
 -- Queryable failure classification on the run (audit metadata also carries it,
 -- but columns make ops queries cheap: "all runs failed with lease_lost").
@@ -76,6 +76,10 @@ ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS retry_policy_version TEXT;
 -- Redrive audit for outbox dead letters (FR-EVT-002 "redrive có audit").
 -- A redrive = clear dead_lettered_at/dead_letter_reason on the outbox row and
 -- record who did it and why.
+-- Reconciliation (2026-10-25): this table is the delivery-side bookkeeping;
+-- vtx-13's `operator_audit_log` (migration 00013_ops.sql, same migration) is
+-- the operator-side audit for the same action. The redrive tx writes BOTH rows
+-- and emits outbox.delivery_redriven.v1 — one action, two complementary rows.
 CREATE TABLE IF NOT EXISTS delivery_redrives (
     redrive_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     outbox_event_id UUID NOT NULL,          -- no FK: retention must not cascade
@@ -194,7 +198,7 @@ parallel log.
 
 | Method | Path | Principal | Purpose |
 |---|---|---|---|
-| POST | `/internal/v1/outbox/dead-letters/{event_id}/redrive` | `operator` | Audited DLQ redrive → `delivery_redrives` |
+| POST | `/api/v1/operator/outbox/dlq/{outbox_id}/redrive` | `operator` | Audited DLQ redrive → `delivery_redrives` |
 | GET  | `/internal/v1/runs?state=retry_wait,blocked` | `operator` | Triage list for dashboard |
 | POST | `/internal/v1/runs/{id}/block` `/{id}/resume` `/{id}/cancel` | `operator` | Existing `TransitionRun` verbs — no new endpoint needed, listed for completeness |
 

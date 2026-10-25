@@ -7,7 +7,7 @@ against — the normalized requirement plus the test baseline recorded on the
 run's `base_sha` **before** the agent touches code.
 **Consumes:** `task_runs` (VTX-3), worktree allocation (VTX-4), `FetchIssue`
 (`internal/integrations/jira`), `verification_runs` kind=`baseline` (VTX-8
-table, `00007`), `evidence_artifacts` (VTX-9 table, `00006`).
+table, `00008`), `evidence_artifacts` (VTX-9 table, `00009`).
 **Produces:** `run_requirements` rows, baseline `verification_runs` rows,
 outbox events `run.requirement_ready.v1` / `run.baseline_recorded.v1`, the
 `AgentDispatch` payload consumed by VTX-7.

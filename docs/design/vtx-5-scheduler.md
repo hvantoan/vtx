@@ -62,20 +62,29 @@ evidence (VTX-9/10). It only decides *who may hold a coding slot*.
 
 ---
 
-## 3. Data Model / DDL Deltas (future migration `00006_scheduler.sql`)
+## 3. Data Model / DDL Deltas (future migration `00011_scheduler.sql`)
 
 ```sql
 -- Heartbeat registry for scheduler workers and agent hosts (VTX-7) —
 -- feeds GET /api/v1/operator/workers (VTX-13 FR-UI-001) and the
 -- RecoverySweeper's "is anyone still alive" classification.
 CREATE TABLE IF NOT EXISTS worker_heartbeats (
-    worker_id TEXT PRIMARY KEY,          -- e.g. 'scheduler-01', 'agent-host-<run>'
-    worker_kind TEXT NOT NULL CHECK (worker_kind IN ('scheduler','dispatcher','agent_host','sweeper')),
+    -- Reconciled 2026-10-25 with vtx-13 §3: composite PK lets one host run
+    -- several kinds; run_id/queue/active_runs serve both the sweeper and
+    -- the /operator/workers view.
+    worker_id TEXT NOT NULL,             -- e.g. 'scheduler-01', 'agent-host-<run>'
+    worker_kind TEXT NOT NULL CHECK (worker_kind IN
+        ('temporal','dispatcher','scheduler','agent_host','sweeper')),
     run_id UUID REFERENCES task_runs(run_id) ON DELETE SET NULL,  -- agent_host only
+    queue TEXT,
+    active_runs INT NOT NULL DEFAULT 0,
     last_beat_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     metadata JSONB,                      -- version, host, pid, capacity notes
-    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (worker_id, worker_kind)
 );
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_beat
+    ON worker_heartbeats (last_beat_at);
 
 -- A worker is 'up' when now() - last_beat_at < 3 * beat interval (default 15s).
 -- Computed at read time — no status column, per VTX-13 "measured, not hardcoded".
@@ -170,8 +179,8 @@ discipline as VTX-3/4.
   task, then try admission).
 - **Tick fallback:** `SCHEDULER_TICK` (default 5s) sweeps the same two
   routines — the events are a latency optimization, never a correctness input.
-- **Beats:** each scheduler replica writes `worker_heartbeats
-  (worker_id='scheduler-<n>', kind='scheduler')` every `BEAT_INTERVAL` (5s);
+- **Beats:** each scheduler replica writes `worker_heartbeats`
+  (worker_id='scheduler-<n>', kind='scheduler')` every `BEAT_INTERVAL` (15s);
   `agent_host` beats are written by VTX-7 keyed to `run_id`.
 
 ### 4.3 Admission tx (the ≤3 invariant)
