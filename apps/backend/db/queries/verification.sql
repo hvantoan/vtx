@@ -11,12 +11,12 @@ INSERT INTO verification_runs (
     $1, $2, $3, $4, $5, $6, $7, $8
 )
 ON CONFLICT (run_id, attempt, suite) DO NOTHING
-RETURNING verification_id, kind, run_id, attempt, suite, command,
+RETURNING kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at;
 
 -- name: GetVerificationRun :one
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -36,12 +36,12 @@ SET status = $2,
     error_detail = $8,
     finished_at = $9
 WHERE verification_id = $1 AND status = 'running'
-RETURNING verification_id, kind, run_id, attempt, suite, command,
+RETURNING kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at;
 
 -- name: ListVerificationRuns :many
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -50,7 +50,7 @@ ORDER BY attempt, started_at;
 
 -- name: GetVerificationSuiteSetAtSHA :many
 -- The gate/QA lookup: "does a full suite set exist at THIS sha".
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -68,7 +68,7 @@ WHERE run_id = $1
 
 -- name: ListStaleRunningVerification :many
 -- Crash reconcile sweep: rows stuck 'running' whose starter is presumed dead.
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs

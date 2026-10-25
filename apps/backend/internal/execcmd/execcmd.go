@@ -97,8 +97,9 @@ func (r ProcessRunner) Run(ctx context.Context, spec CmdSpec) (Result, error) {
 	var tail tailBuffer
 	tail.limit = LogTailSize
 	hasher := sha256.New()
-	cmd.Stdout = io.MultiWriter(&capture, &tail, hasher)
-	cmd.Stderr = io.MultiWriter(&capture, &tail, hasher)
+	output := io.MultiWriter(&capture, &tail, hasher)
+	cmd.Stdout = output
+	cmd.Stderr = output
 
 	start := time.Now()
 	err := cmd.Run()
@@ -148,6 +149,9 @@ type captureBuffer struct {
 }
 
 func (b *captureBuffer) Write(p []byte) (int, error) {
+	if len(p) > b.limit-b.buf.Len() {
+		b.truncated = true
+	}
 	if remaining := b.limit - b.buf.Len(); remaining > 0 {
 		if len(p) > remaining {
 			_, _ = b.buf.Write(p[:remaining])
@@ -155,14 +159,11 @@ func (b *captureBuffer) Write(p []byte) (int, error) {
 			_, _ = b.buf.Write(p)
 		}
 	}
-	if b.buf.Len() >= b.limit {
-		b.truncated = true
-	}
 	return len(p), nil
 }
 
-func (b *captureBuffer) Bytes() []byte    { return b.buf.Bytes() }
-func (b *captureBuffer) Truncated() bool  { return b.truncated }
+func (b *captureBuffer) Bytes() []byte   { return b.buf.Bytes() }
+func (b *captureBuffer) Truncated() bool { return b.truncated }
 
 // tailBuffer keeps the last limit bytes of a stream.
 type tailBuffer struct {

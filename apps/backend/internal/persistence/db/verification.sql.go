@@ -22,7 +22,7 @@ SET status = $2,
     error_detail = $8,
     finished_at = $9
 WHERE verification_id = $1 AND status = 'running'
-RETURNING verification_id, kind, run_id, attempt, suite, command,
+RETURNING kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 `
@@ -39,29 +39,9 @@ type FinishVerificationRunParams struct {
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 }
 
-type FinishVerificationRunRow struct {
-	VerificationID   pgtype.UUID        `json:"verification_id"`
-	Kind             string             `json:"kind"`
-	RunID            pgtype.UUID        `json:"run_id"`
-	Attempt          int32              `json:"attempt"`
-	Suite            string             `json:"suite"`
-	Command          string             `json:"command"`
-	SubjectCommitSha string             `json:"subject_commit_sha"`
-	Status           string             `json:"status"`
-	ExitCode         pgtype.Int4        `json:"exit_code"`
-	DurationMs       pgtype.Int4        `json:"duration_ms"`
-	LogRef           pgtype.Text        `json:"log_ref"`
-	LogTail          pgtype.Text        `json:"log_tail"`
-	LogDigest        pgtype.Text        `json:"log_digest"`
-	ErrorDetail      pgtype.Text        `json:"error_detail"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
 // Terminal transition for a 'running' row ONLY. 0 rows means a reconciler or
 // a fence already moved it — the caller treats that as lease/crash loss.
-func (q *Queries) FinishVerificationRun(ctx context.Context, arg FinishVerificationRunParams) (FinishVerificationRunRow, error) {
+func (q *Queries) FinishVerificationRun(ctx context.Context, arg FinishVerificationRunParams) (VerificationRun, error) {
 	row := q.db.QueryRow(ctx, finishVerificationRun,
 		arg.VerificationID,
 		arg.Status,
@@ -73,10 +53,10 @@ func (q *Queries) FinishVerificationRun(ctx context.Context, arg FinishVerificat
 		arg.ErrorDetail,
 		arg.FinishedAt,
 	)
-	var i FinishVerificationRunRow
+	var i VerificationRun
 	err := row.Scan(
-		&i.VerificationID,
 		&i.Kind,
+		&i.VerificationID,
 		&i.RunID,
 		&i.Attempt,
 		&i.Suite,
@@ -97,7 +77,7 @@ func (q *Queries) FinishVerificationRun(ctx context.Context, arg FinishVerificat
 }
 
 const getVerificationRun = `-- name: GetVerificationRun :one
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -111,32 +91,12 @@ type GetVerificationRunParams struct {
 	Suite   string      `json:"suite"`
 }
 
-type GetVerificationRunRow struct {
-	VerificationID   pgtype.UUID        `json:"verification_id"`
-	Kind             string             `json:"kind"`
-	RunID            pgtype.UUID        `json:"run_id"`
-	Attempt          int32              `json:"attempt"`
-	Suite            string             `json:"suite"`
-	Command          string             `json:"command"`
-	SubjectCommitSha string             `json:"subject_commit_sha"`
-	Status           string             `json:"status"`
-	ExitCode         pgtype.Int4        `json:"exit_code"`
-	DurationMs       pgtype.Int4        `json:"duration_ms"`
-	LogRef           pgtype.Text        `json:"log_ref"`
-	LogTail          pgtype.Text        `json:"log_tail"`
-	LogDigest        pgtype.Text        `json:"log_digest"`
-	ErrorDetail      pgtype.Text        `json:"error_detail"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
-func (q *Queries) GetVerificationRun(ctx context.Context, arg GetVerificationRunParams) (GetVerificationRunRow, error) {
+func (q *Queries) GetVerificationRun(ctx context.Context, arg GetVerificationRunParams) (VerificationRun, error) {
 	row := q.db.QueryRow(ctx, getVerificationRun, arg.RunID, arg.Attempt, arg.Suite)
-	var i GetVerificationRunRow
+	var i VerificationRun
 	err := row.Scan(
-		&i.VerificationID,
 		&i.Kind,
+		&i.VerificationID,
 		&i.RunID,
 		&i.Attempt,
 		&i.Suite,
@@ -157,7 +117,7 @@ func (q *Queries) GetVerificationRun(ctx context.Context, arg GetVerificationRun
 }
 
 const getVerificationSuiteSetAtSHA = `-- name: GetVerificationSuiteSetAtSHA :many
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -170,39 +130,19 @@ type GetVerificationSuiteSetAtSHAParams struct {
 	SubjectCommitSha string      `json:"subject_commit_sha"`
 }
 
-type GetVerificationSuiteSetAtSHARow struct {
-	VerificationID   pgtype.UUID        `json:"verification_id"`
-	Kind             string             `json:"kind"`
-	RunID            pgtype.UUID        `json:"run_id"`
-	Attempt          int32              `json:"attempt"`
-	Suite            string             `json:"suite"`
-	Command          string             `json:"command"`
-	SubjectCommitSha string             `json:"subject_commit_sha"`
-	Status           string             `json:"status"`
-	ExitCode         pgtype.Int4        `json:"exit_code"`
-	DurationMs       pgtype.Int4        `json:"duration_ms"`
-	LogRef           pgtype.Text        `json:"log_ref"`
-	LogTail          pgtype.Text        `json:"log_tail"`
-	LogDigest        pgtype.Text        `json:"log_digest"`
-	ErrorDetail      pgtype.Text        `json:"error_detail"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
 // The gate/QA lookup: "does a full suite set exist at THIS sha".
-func (q *Queries) GetVerificationSuiteSetAtSHA(ctx context.Context, arg GetVerificationSuiteSetAtSHAParams) ([]GetVerificationSuiteSetAtSHARow, error) {
+func (q *Queries) GetVerificationSuiteSetAtSHA(ctx context.Context, arg GetVerificationSuiteSetAtSHAParams) ([]VerificationRun, error) {
 	rows, err := q.db.Query(ctx, getVerificationSuiteSetAtSHA, arg.RunID, arg.SubjectCommitSha)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetVerificationSuiteSetAtSHARow
+	var items []VerificationRun
 	for rows.Next() {
-		var i GetVerificationSuiteSetAtSHARow
+		var i VerificationRun
 		if err := rows.Scan(
-			&i.VerificationID,
 			&i.Kind,
+			&i.VerificationID,
 			&i.RunID,
 			&i.Attempt,
 			&i.Suite,
@@ -237,7 +177,7 @@ INSERT INTO verification_runs (
     $1, $2, $3, $4, $5, $6, $7, $8
 )
 ON CONFLICT (run_id, attempt, suite) DO NOTHING
-RETURNING verification_id, kind, run_id, attempt, suite, command,
+RETURNING kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 `
@@ -253,32 +193,12 @@ type InsertVerificationRunParams struct {
 	StartedAt        pgtype.Timestamptz `json:"started_at"`
 }
 
-type InsertVerificationRunRow struct {
-	VerificationID   pgtype.UUID        `json:"verification_id"`
-	Kind             string             `json:"kind"`
-	RunID            pgtype.UUID        `json:"run_id"`
-	Attempt          int32              `json:"attempt"`
-	Suite            string             `json:"suite"`
-	Command          string             `json:"command"`
-	SubjectCommitSha string             `json:"subject_commit_sha"`
-	Status           string             `json:"status"`
-	ExitCode         pgtype.Int4        `json:"exit_code"`
-	DurationMs       pgtype.Int4        `json:"duration_ms"`
-	LogRef           pgtype.Text        `json:"log_ref"`
-	LogTail          pgtype.Text        `json:"log_tail"`
-	LogDigest        pgtype.Text        `json:"log_digest"`
-	ErrorDetail      pgtype.Text        `json:"error_detail"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
 // VTX-8 verification queries. Rows are append-only: the only UPDATE is the
 // guarded 'running' -> terminal finish (or 'superseded' marking on SHA drift).
 // One row per (run_id, attempt, suite). ON CONFLICT DO NOTHING makes a replay
 // of the same attempt idempotent: no row is returned and the caller re-reads
 // the existing row via GetVerificationRun instead of double-writing.
-func (q *Queries) InsertVerificationRun(ctx context.Context, arg InsertVerificationRunParams) (InsertVerificationRunRow, error) {
+func (q *Queries) InsertVerificationRun(ctx context.Context, arg InsertVerificationRunParams) (VerificationRun, error) {
 	row := q.db.QueryRow(ctx, insertVerificationRun,
 		arg.Kind,
 		arg.RunID,
@@ -289,10 +209,10 @@ func (q *Queries) InsertVerificationRun(ctx context.Context, arg InsertVerificat
 		arg.Status,
 		arg.StartedAt,
 	)
-	var i InsertVerificationRunRow
+	var i VerificationRun
 	err := row.Scan(
-		&i.VerificationID,
 		&i.Kind,
+		&i.VerificationID,
 		&i.RunID,
 		&i.Attempt,
 		&i.Suite,
@@ -313,7 +233,7 @@ func (q *Queries) InsertVerificationRun(ctx context.Context, arg InsertVerificat
 }
 
 const listStaleRunningVerification = `-- name: ListStaleRunningVerification :many
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -321,39 +241,19 @@ WHERE status = 'running' AND started_at < $1
 ORDER BY started_at
 `
 
-type ListStaleRunningVerificationRow struct {
-	VerificationID   pgtype.UUID        `json:"verification_id"`
-	Kind             string             `json:"kind"`
-	RunID            pgtype.UUID        `json:"run_id"`
-	Attempt          int32              `json:"attempt"`
-	Suite            string             `json:"suite"`
-	Command          string             `json:"command"`
-	SubjectCommitSha string             `json:"subject_commit_sha"`
-	Status           string             `json:"status"`
-	ExitCode         pgtype.Int4        `json:"exit_code"`
-	DurationMs       pgtype.Int4        `json:"duration_ms"`
-	LogRef           pgtype.Text        `json:"log_ref"`
-	LogTail          pgtype.Text        `json:"log_tail"`
-	LogDigest        pgtype.Text        `json:"log_digest"`
-	ErrorDetail      pgtype.Text        `json:"error_detail"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
 // Crash reconcile sweep: rows stuck 'running' whose starter is presumed dead.
-func (q *Queries) ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]ListStaleRunningVerificationRow, error) {
+func (q *Queries) ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]VerificationRun, error) {
 	rows, err := q.db.Query(ctx, listStaleRunningVerification, startedAt)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListStaleRunningVerificationRow
+	var items []VerificationRun
 	for rows.Next() {
-		var i ListStaleRunningVerificationRow
+		var i VerificationRun
 		if err := rows.Scan(
-			&i.VerificationID,
 			&i.Kind,
+			&i.VerificationID,
 			&i.RunID,
 			&i.Attempt,
 			&i.Suite,
@@ -381,7 +281,7 @@ func (q *Queries) ListStaleRunningVerification(ctx context.Context, startedAt pg
 }
 
 const listVerificationRuns = `-- name: ListVerificationRuns :many
-SELECT verification_id, kind, run_id, attempt, suite, command,
+SELECT kind, verification_id, run_id, attempt, suite, command,
     subject_commit_sha, status, exit_code, duration_ms, log_ref, log_tail,
     log_digest, error_detail, started_at, finished_at, created_at
 FROM verification_runs
@@ -389,38 +289,18 @@ WHERE run_id = $1
 ORDER BY attempt, started_at
 `
 
-type ListVerificationRunsRow struct {
-	VerificationID   pgtype.UUID        `json:"verification_id"`
-	Kind             string             `json:"kind"`
-	RunID            pgtype.UUID        `json:"run_id"`
-	Attempt          int32              `json:"attempt"`
-	Suite            string             `json:"suite"`
-	Command          string             `json:"command"`
-	SubjectCommitSha string             `json:"subject_commit_sha"`
-	Status           string             `json:"status"`
-	ExitCode         pgtype.Int4        `json:"exit_code"`
-	DurationMs       pgtype.Int4        `json:"duration_ms"`
-	LogRef           pgtype.Text        `json:"log_ref"`
-	LogTail          pgtype.Text        `json:"log_tail"`
-	LogDigest        pgtype.Text        `json:"log_digest"`
-	ErrorDetail      pgtype.Text        `json:"error_detail"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
-func (q *Queries) ListVerificationRuns(ctx context.Context, runID pgtype.UUID) ([]ListVerificationRunsRow, error) {
+func (q *Queries) ListVerificationRuns(ctx context.Context, runID pgtype.UUID) ([]VerificationRun, error) {
 	rows, err := q.db.Query(ctx, listVerificationRuns, runID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListVerificationRunsRow
+	var items []VerificationRun
 	for rows.Next() {
-		var i ListVerificationRunsRow
+		var i VerificationRun
 		if err := rows.Scan(
-			&i.VerificationID,
 			&i.Kind,
+			&i.VerificationID,
 			&i.RunID,
 			&i.Attempt,
 			&i.Suite,
