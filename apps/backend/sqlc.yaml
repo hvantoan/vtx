@@ -12,3 +12,6 @@ sql:
         emit_prepared_queries: false
         emit_interface: true
         emit_exact_table_names: false
+        rename:
+          # sqlc singularizes "redrives" incorrectly.
+          delivery_redrife: DeliveryRedrive

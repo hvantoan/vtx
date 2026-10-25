@@ -55,7 +55,8 @@ const getTaskRun = `-- name: GetTaskRun :one
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 LIMIT 1
@@ -87,6 +88,8 @@ func (q *Queries) GetTaskRun(ctx context.Context, runID pgtype.UUID) (TaskRun, e
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.FailureClass,
+		&i.RetryPolicyVersion,
 	)
 	return i, err
 }
@@ -95,7 +98,8 @@ const getTaskRunForUpdate = `-- name: GetTaskRunForUpdate :one
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 FOR UPDATE
@@ -130,6 +134,8 @@ func (q *Queries) GetTaskRunForUpdate(ctx context.Context, runID pgtype.UUID) (T
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.FailureClass,
+		&i.RetryPolicyVersion,
 	)
 	return i, err
 }
@@ -243,7 +249,8 @@ INSERT INTO task_runs (
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version
 `
 
 type InsertTaskRunParams struct {
@@ -287,6 +294,8 @@ func (q *Queries) InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) (T
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.FailureClass,
+		&i.RetryPolicyVersion,
 	)
 	return i, err
 }
@@ -464,25 +473,32 @@ SET state = $2,
     error_message = $7,
     started_at = $8,
     finished_at = $9,
+    -- VTX-11: NULL keeps the recorded class/version — only the retry path
+    -- writes them, so a plain advance cannot erase the failure evidence.
+    failure_class = COALESCE($11::text, failure_class),
+    retry_policy_version = COALESCE($12::text, retry_policy_version),
     updated_at = CURRENT_TIMESTAMP
 WHERE run_id = $1 AND version = $10
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version
 `
 
 type UpdateTaskRunStateParams struct {
-	RunID        pgtype.UUID        `json:"run_id"`
-	State        string             `json:"state"`
-	ResumeState  pgtype.Text        `json:"resume_state"`
-	RetryDueAt   pgtype.Timestamptz `json:"retry_due_at"`
-	Attempt      int32              `json:"attempt"`
-	ErrorCode    pgtype.Text        `json:"error_code"`
-	ErrorMessage pgtype.Text        `json:"error_message"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
-	Version      int64              `json:"version"`
+	RunID              pgtype.UUID        `json:"run_id"`
+	State              string             `json:"state"`
+	ResumeState        pgtype.Text        `json:"resume_state"`
+	RetryDueAt         pgtype.Timestamptz `json:"retry_due_at"`
+	Attempt            int32              `json:"attempt"`
+	ErrorCode          pgtype.Text        `json:"error_code"`
+	ErrorMessage       pgtype.Text        `json:"error_message"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	Version            int64              `json:"version"`
+	FailureClass       pgtype.Text        `json:"failure_class"`
+	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
 }
 
 // CAS on version. Called only after GetTaskRunForUpdate; `WHERE version = $10`
@@ -499,6 +515,8 @@ func (q *Queries) UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunState
 		arg.StartedAt,
 		arg.FinishedAt,
 		arg.Version,
+		arg.FailureClass,
+		arg.RetryPolicyVersion,
 	)
 	var i TaskRun
 	err := row.Scan(
@@ -524,6 +542,8 @@ func (q *Queries) UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunState
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.FailureClass,
+		&i.RetryPolicyVersion,
 	)
 	return i, err
 }

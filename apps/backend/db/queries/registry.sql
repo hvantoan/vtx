@@ -54,7 +54,8 @@ INSERT INTO task_runs (
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at;
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version;
 
 -- name: HasActiveRunForTask :one
 -- I-03 read side: the partial unique index is the enforcement, this is the
@@ -69,7 +70,8 @@ SELECT EXISTS (
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 LIMIT 1;
@@ -81,7 +83,8 @@ LIMIT 1;
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 FOR UPDATE;
@@ -99,12 +102,17 @@ SET state = $2,
     error_message = $7,
     started_at = $8,
     finished_at = $9,
+    -- VTX-11: NULL keeps the recorded class/version — only the retry path
+    -- writes them, so a plain advance cannot erase the failure evidence.
+    failure_class = COALESCE(sqlc.narg('failure_class')::text, failure_class),
+    retry_policy_version = COALESCE(sqlc.narg('retry_policy_version')::text, retry_policy_version),
     updated_at = CURRENT_TIMESTAMP
 WHERE run_id = $1 AND version = $10
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at;
+    lease_expires_at, created_at, updated_at, started_at, finished_at,
+    failure_class, retry_policy_version;
 
 -- name: InsertTaskRunEvent :one
 -- I-05: the creation row is version 0 with previous_state = '' (a run is born,
