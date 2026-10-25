@@ -51,11 +51,14 @@ func (s *Server) qualityRoutes(r chi.Router) {
 				r.Get("/runs/{run_id}/gate/decision", s.HandleGateRead)
 				r.Get("/runs/{run_id}/gate/history", s.HandleGateHistory)
 			}
+			if s.redriver != nil {
+				// Internal per-consumer redrive (VTX-11 audit: delivery_redrives).
+				// The public operator path POST /api/v1/operator/outbox/dlq/{id}/redrive
+				// is owned by the operator group in routes.go.
+				r.Post("/outbox/dlq/{outbox_id}/redrive", s.HandleDeliveryRedrive)
+			}
 		})
 	})
-	if s.redriver != nil {
-		r.With(RegistryActorMiddleware(s.cfg.RegistryActorTokens)).Post("/api/v1/operator/outbox/dlq/{outbox_id}/redrive", s.HandleDeliveryRedrive)
-	}
 }
 func qualityActor(w http.ResponseWriter, r *http.Request, allowed ...domain.Actor) bool {
 	actor, ok := RegistryActorFromContext(r.Context())

@@ -159,9 +159,11 @@ type transitionKey struct {
 	action Action
 }
 
-// stageAdvance is the linear pipeline chain. Every hop is operational now
-// that VTX-5..12 are merged; evidence enforcement lives in the transition
-// guards (coding/verifying/qa/quality_gate) and the preparing readiness gate.
+// stageAdvance is the linear pipeline chain. Hops stay contract-closed in
+// the table by default: preparing opens on PreparationReady evidence,
+// coding/verifying/qa/quality_gate open only through an EvidenceGuard-
+// backed transition (EvaluateWithGuard), and quality_gate is also table-
+// operational for the VTX-12 draft-PR path.
 var stageAdvance = []State{
 	StatePreparing, StateCoding, StateVerifying, StateQA, StateQualityGate, StatePRDraft,
 }
@@ -179,7 +181,11 @@ func transitionTable() map[transitionKey]transition {
 			key:         transitionKey{from, ActionAdvance},
 			to:          stageAdvance[i+1],
 			actors:      []Actor{ActorOrchestrator},
-			operational: true,
+			// preparing opens via the PreparationReady evidence check inside
+			// Evaluate; quality_gate is operational for the VTX-12 PR path.
+			// coding/verifying/qa stay closed in the table and open only
+			// through EvaluateWithGuard when an EvidenceGuard is registered.
+			operational: from == StatePreparing || from == StateQualityGate,
 		})
 	}
 
