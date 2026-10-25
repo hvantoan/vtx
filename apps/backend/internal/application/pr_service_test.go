@@ -16,6 +16,7 @@ type fakePRStore struct {
 	verdictErr error
 	saved      *SavePullRequest
 	view       PullRequestView
+	existing   *PullRequestView
 }
 
 func (f *fakePRStore) LoadPRRun(context.Context, string) (PRRun, error) { return f.run, nil }
@@ -23,6 +24,9 @@ func (f *fakePRStore) GetGateVerdict(context.Context, string, string) (GateVerdi
 	return f.verdict, f.verdictErr
 }
 func (f *fakePRStore) GetPullRequestByRun(context.Context, string) (PullRequestView, error) {
+	if f.existing != nil {
+		return *f.existing, nil
+	}
 	return PullRequestView{}, ErrPRNotFound
 }
 func (f *fakePRStore) SaveOpenedPullRequest(_ context.Context, in SavePullRequest) (PullRequestView, error) {
@@ -135,6 +139,25 @@ func TestOpenDraftPRBindsRequestToPassingRunAndSHA(t *testing.T) {
 	}
 	if len(transitions.calls) != 2 || transitions.calls[0].Action != domain.ActionAdvance || transitions.calls[1].Action != domain.ActionComplete {
 		t.Fatalf("transitions=%#v", transitions.calls)
+	}
+}
+
+func TestOpenDraftPRReplayWithPersistedPRCompletesRun(t *testing.T) {
+	run := testPRRun()
+	run.State = domain.StatePRDraft
+	existing := PullRequestView{RunID: run.RunID, Draft: true, Status: "open"}
+	store := &fakePRStore{run: run, verdict: GateVerdict{CommitSHA: "abc123", Decision: "pass"}, existing: &existing}
+	gh := &fakeGitHub{headSHA: "abc123"}
+	transitions := &fakePRTransitions{}
+	got, err := NewPRService(store, gh, transitions, "dev", nil).OpenDraftPR(context.Background(), OpenPRCommand{RunID: run.RunID, ExpectedLeaseEpoch: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != run.RunID || len(transitions.calls) != 1 || transitions.calls[0].Action != domain.ActionComplete {
+		t.Fatalf("got=%#v transitions=%#v", got, transitions.calls)
+	}
+	if gh.created != nil {
+		t.Fatal("replay created a duplicate PR")
 	}
 }
 

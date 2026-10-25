@@ -98,12 +98,6 @@ func (s *PRService) OpenDraftPR(ctx context.Context, cmd OpenPRCommand) (PullReq
 		return PullRequestView{}, fmt.Errorf("get gated commit: %w", err)
 	}
 
-	if existing, err := s.store.GetPullRequestByRun(ctx, run.RunID); err == nil {
-		return existing, nil
-	} else if !errors.Is(err, ErrPRNotFound) {
-		return PullRequestView{}, fmt.Errorf("read existing PR: %w", err)
-	}
-
 	currentVersion := run.Version
 	if run.State == domain.StateQualityGate {
 		metadata, _ := json.Marshal(map[string]string{"gate_decision_id": verdict.DecisionID, "commit_sha": *run.CommitSHA})
@@ -116,6 +110,12 @@ func (s *PRService) OpenDraftPR(ctx context.Context, cmd OpenPRCommand) (PullReq
 			return PullRequestView{}, fmt.Errorf("advance run to pr_draft: %w", err)
 		}
 		currentVersion = advanced.Version
+	}
+
+	if existing, err := s.store.GetPullRequestByRun(ctx, run.RunID); err == nil {
+		return s.completeDraftPRRun(ctx, run.RunID, currentVersion, cmd.ExpectedLeaseEpoch, existing)
+	} else if !errors.Is(err, ErrPRNotFound) {
+		return PullRequestView{}, fmt.Errorf("read existing PR: %w", err)
 	}
 
 	refs, err := s.github.ListOpenPRsForHead(ctx, owner, repo, run.Branch)
@@ -137,6 +137,14 @@ func (s *PRService) OpenDraftPR(ctx context.Context, cmd OpenPRCommand) (PullReq
 		pr, err = s.github.CreateDraftPR(ctx, owner, repo, CreatePRInput{
 			Title: cmd.Title, Body: body, Head: run.Branch, Base: s.baseBranch,
 		})
+		if errors.Is(err, ErrGitHubValidation) {
+			// Another driver may have won after list-before-create. Re-read
+			// external truth and adopt rather than creating a duplicate.
+			refs, listErr := s.github.ListOpenPRsForHead(ctx, owner, repo, run.Branch)
+			if listErr == nil && len(refs) > 0 {
+				pr, err = refs[0], nil
+			}
+		}
 		if err != nil {
 			return PullRequestView{}, fmt.Errorf("create draft PR: %w", err)
 		}
@@ -152,9 +160,13 @@ func (s *PRService) OpenDraftPR(ctx context.Context, cmd OpenPRCommand) (PullReq
 	if err != nil {
 		return PullRequestView{}, fmt.Errorf("persist opened PR: %w", err)
 	}
+	return s.completeDraftPRRun(ctx, run.RunID, currentVersion, cmd.ExpectedLeaseEpoch, view)
+}
+
+func (s *PRService) completeDraftPRRun(ctx context.Context, runID string, version, leaseEpoch int64, view PullRequestView) (PullRequestView, error) {
 	if _, err := s.transitions.TransitionRun(ctx, TransitionCommand{
-		RunID: run.RunID, ExpectedVersion: currentVersion,
-		ExpectedLeaseEpoch: cmd.ExpectedLeaseEpoch, Action: domain.ActionComplete,
+		RunID: runID, ExpectedVersion: version,
+		ExpectedLeaseEpoch: leaseEpoch, Action: domain.ActionComplete,
 		Actor: domain.ActorOrchestrator, ActorType: domain.ActorTypeSystem,
 	}); err != nil {
 		return view, fmt.Errorf("complete PR run: %w", err)

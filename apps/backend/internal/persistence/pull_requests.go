@@ -114,6 +114,12 @@ func (s *PgPRStore) SaveOpenedPullRequest(ctx context.Context, in application.Sa
 		OpenedAt: pgtype.Timestamptz{Time: opened, Valid: true},
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			// A concurrent replay may have persisted the same run while this
+			// transaction waited. Adopt the durable winner.
+			_ = tx.Rollback(ctx)
+			return s.GetPullRequestByRun(ctx, in.RunID)
+		}
 		return application.PullRequestView{}, fmt.Errorf("insert pull request: %w", err)
 	}
 	if err := q.SetRunPrURL(ctx, db.SetRunPrURLParams{RunID: runID, PrUrl: textFromOptional(in.PR.URL)}); err != nil {
