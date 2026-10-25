@@ -11,6 +11,7 @@ import (
 // tests. The store owns transactions; the git port owns the filesystem.
 
 var (
+	ErrAdmissionCap = errors.New("scheduler: admission full")
 	// ErrWorktreeRunTerminal — the run reached a terminal state; no worktree
 	// may be allocated for it.
 	ErrWorktreeRunTerminal = errors.New("worktree: run is terminal")

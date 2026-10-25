@@ -62,6 +62,14 @@ func ensureReconcileSchedule(ctx context.Context, c client.Client, cfg *config.C
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "scheduler" {
+		runScheduler()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "preparing" {
+		runPreparing()
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "registry" {
 		runRegistryDispatcher()
 		return
@@ -122,6 +130,12 @@ func runTemporalWorker() {
 		acts := orchestration.NewWorktreeActivities(worktreeSvc)
 		w.RegisterActivity(acts)
 		w.RegisterWorkflow(orchestration.WorktreeReconcileWorkflow)
+		if preparation, err := preparationActivities(database, cfg); err != nil {
+			logger.Warn("preparation activities unavailable", "error", err)
+		} else {
+			w.RegisterActivity(preparation)
+			w.RegisterWorkflow(orchestration.PreparationWorkflow)
+		}
 
 		// Boot sweep (advise decision 4a): crash-orphans and expired leases
 		// left by the previous process are reclaimed before new work starts.

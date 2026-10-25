@@ -19,6 +19,7 @@ type Querier interface {
 	// invalidates every previously observed epoch — that is the fencing token
 	// stale holders get rejected on.
 	AcquireRunLease(ctx context.Context, arg AcquireRunLeaseParams) (AcquireRunLeaseRow, error)
+	ClaimDeferredForTask(ctx context.Context, taskID pgtype.UUID) (DeferredIntent, error)
 	// VTX-3 outbox dispatcher queries (§0.E: exactly ONE consumer identity, N
 	// replicas — SKIP LOCKED spreads work, `claimed_by` never hides work from a
 	// sibling). `published_at` is the consumer-specific ACK: it is stamped by the
@@ -27,6 +28,7 @@ type Querier interface {
 	// cannot drift apart, so two dispatcher replicas never claim the same event.
 	// Expired claims (claimed_until <= now()) are reclaimable after a crash.
 	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]ClaimOutboxEventsRow, error)
+	CountLiveAdmissionSlots(ctx context.Context) (int64, error)
 	// Lag of the consumer that reads `event_type` — count + age of the oldest
 	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
 	// the intended signal, not a stuck queue.
@@ -36,11 +38,16 @@ type Querier interface {
 	// Retention: terminal noise receipts age out; accepted/duplicate rows and
 	// inbox rows are kept as the dedup/audit record.
 	DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error)
+	FinishRunBaseline(ctx context.Context, arg FinishRunBaselineParams) (VerificationRun, error)
 	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
+	GetDeferredIntentOrigin(ctx context.Context, intentID pgtype.UUID) (GetDeferredIntentOriginRow, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
 	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
+	GetRequirementInput(ctx context.Context, runID pgtype.UUID) (GetRequirementInputRow, error)
+	GetRunBaseline(ctx context.Context, arg GetRunBaselineParams) (VerificationRun, error)
 	// Lightweight lease read for fencing checks that do not need the whole row.
 	GetRunLeaseState(ctx context.Context, runID pgtype.UUID) (GetRunLeaseStateRow, error)
+	GetRunRequirement(ctx context.Context, runID pgtype.UUID) (RunRequirement, error)
 	// Allocation input: the run's task identity fields plus its repo_url (nullable
 	// for tasks created before VTX-4 or before a repo was recorded).
 	GetRunTaskRepo(ctx context.Context, runID pgtype.UUID) (GetRunTaskRepoRow, error)
@@ -56,6 +63,7 @@ type Querier interface {
 	HasActiveRunForTask(ctx context.Context, taskID pgtype.UUID) (bool, error)
 	// An intent is consumed once it has either an admitted run or a deferred row.
 	HasConsumedIntent(ctx context.Context, intentID pgtype.UUID) (bool, error)
+	HasPreparationEvidence(ctx context.Context, runID pgtype.UUID) (bool, error)
 	// ON CONFLICT DO NOTHING ⇒ replaying the same intent yields no row (the
 	// inbox receipt already deduped it, this is belt and braces).
 	InsertDeferredIntent(ctx context.Context, arg InsertDeferredIntentParams) (DeferredIntent, error)
@@ -69,6 +77,7 @@ type Querier interface {
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error)
+	InsertRunBaseline(ctx context.Context, arg InsertRunBaselineParams) (VerificationRun, error)
 	// run_id comes from gen_random_uuid() — never from the Go process.
 	InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) (TaskRun, error)
 	// I-05: the creation row is version 0 with previous_state = '' (a run is born,
@@ -90,15 +99,22 @@ type Querier interface {
 	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
 	// FIFO order is the contract for the admission path (VTX-5).
 	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
+	ListDueRetryRuns(ctx context.Context, limit int32) ([]TaskRun, error)
+	ListExpiredLeaseRuns(ctx context.Context, limit int32) ([]TaskRun, error)
+	ListPreparingRuns(ctx context.Context, limit int32) ([]pgtype.UUID, error)
+	ListPromotableTasks(ctx context.Context, limit int32) ([]RegistryTask, error)
+	ListQueuedRunsForAdmission(ctx context.Context, limit int32) ([]TaskRun, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	// Cursor on version, and the creation audit (version 0) must be reachable:
 	// a NULL cursor means "from the beginning", not "after 0".
 	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
+	LockAdmissionLedger(ctx context.Context) error
 	// Serialize deliveries that refer to the same intent, even when they carry
 	// different source event IDs. The intent row is created before its outbox
 	// event, so a missing row is a payload contract fault.
 	LockExecutionIntent(ctx context.Context, intentID pgtype.UUID) (pgtype.UUID, error)
+	LockRunBaseline(ctx context.Context, dollar_1 pgtype.UUID) error
 	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
 	// second ACK for the same event reports 0 rows.
 	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)
@@ -126,6 +142,7 @@ type Querier interface {
 	// The allocated branch is persisted on the VTX-3 run row — VTX-4 does not
 	// duplicate it into a new run-level column.
 	SetRunBranch(ctx context.Context, arg SetRunBranchParams) error
+	SetSchedulerRunError(ctx context.Context, arg SetSchedulerRunErrorParams) error
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.
 	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
 	// CAS on version. Called only after GetTaskRunForUpdate; `WHERE version = $10`
@@ -140,6 +157,8 @@ type Querier interface {
 	// repo_url (VTX-4) is COALESCEd: a caller that does not know the repo yet must
 	// not erase one a previous delivery recorded.
 	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error)
+	UpsertRunRequirement(ctx context.Context, arg UpsertRunRequirementParams) (RunRequirement, error)
+	UpsertWorkerHeartbeat(ctx context.Context, arg UpsertWorkerHeartbeatParams) (string, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -63,9 +64,34 @@ func (s *PgRegistryStore) TransitionRun(
 		return application.RunSnapshot{}, fmt.Errorf("lock run: %w", err)
 	}
 
-	plan, err := decide(snapshotFromTaskRun(locked))
+	snapshot := snapshotFromTaskRun(locked)
+	if locked.State == "preparing" && cmd.Action == domain.ActionAdvance {
+		snapshot.PreparationReady, err = qtx.HasPreparationEvidence(ctx, locked.RunID)
+		if err != nil {
+			return application.RunSnapshot{}, fmt.Errorf("read preparation evidence: %w", err)
+		}
+	}
+	plan, err := decide(snapshot)
 	if err != nil {
 		return application.RunSnapshot{}, err
+	}
+
+	if locked.State == "preparing" && cmd.Action == domain.ActionAdvance {
+		requirement, err := qtx.GetRunRequirement(ctx, locked.RunID)
+		if err != nil {
+			return application.RunSnapshot{}, fmt.Errorf("read requirement hash: %w", err)
+		}
+		metadata := map[string]any{}
+		if len(plan.Audit.Metadata) > 0 {
+			if err := json.Unmarshal(plan.Audit.Metadata, &metadata); err != nil {
+				return application.RunSnapshot{}, fmt.Errorf("decode transition metadata: %w", err)
+			}
+		}
+		metadata["requirement_hash"] = requirement.RequirementHash
+		plan.Audit.Metadata, err = json.Marshal(metadata)
+		if err != nil {
+			return application.RunSnapshot{}, fmt.Errorf("encode requirement audit: %w", err)
+		}
 	}
 
 	updated, err := qtx.UpdateTaskRunState(ctx, db.UpdateTaskRunStateParams{
@@ -421,7 +447,30 @@ func (s *PgRegistryStore) GetRun(ctx context.Context, runID string) (application
 	if err != nil {
 		return application.RunView{}, fmt.Errorf("get run: %w", err)
 	}
-	return runViewFromTaskRun(row), nil
+	view := runViewFromTaskRun(row)
+	requirements := NewPgRequirementStore(s.pool, s.queries)
+	if packet, exists, err := requirements.Requirement(ctx, runID); err != nil {
+		return application.RunView{}, err
+	} else if exists {
+		view.Requirement, err = json.Marshal(packet)
+		if err != nil {
+			return application.RunView{}, fmt.Errorf("encode requirement view: %w", err)
+		}
+	}
+	if w, err := s.queries.GetWorktreeByRun(ctx, id); err == nil && w.BaseSha.Valid {
+		baseline, err := s.queries.GetRunBaseline(ctx, db.GetRunBaselineParams{RunID: id, SubjectCommitSha: w.BaseSha.String})
+		if err == nil {
+			view.Baseline, err = json.Marshal(baselineFromRow(baseline))
+			if err != nil {
+				return application.RunView{}, err
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return application.RunView{}, err
+		}
+	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return application.RunView{}, err
+	}
+	return view, nil
 }
 
 func (s *PgRegistryStore) ListEvents(ctx context.Context, runID string, afterVersion *int64, limit int32) ([]application.EventView, error) {

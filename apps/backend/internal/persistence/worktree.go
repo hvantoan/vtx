@@ -39,6 +39,9 @@ func (s *PgWorktreeStore) AllocateWorktree(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := s.queries.WithTx(tx)
+	if err := qtx.LockAdmissionLedger(ctx); err != nil {
+		return application.Allocation{}, fmt.Errorf("lock allocation admission: %w", err)
+	}
 
 	runID, err := uuidFromString(cmd.RunID)
 	if err != nil {
@@ -71,6 +74,21 @@ func (s *PgWorktreeStore) AllocateWorktree(
 
 	if isTerminalState(locked.State) {
 		return application.Allocation{}, fmt.Errorf("%w: run %s in %s", application.ErrWorktreeRunTerminal, cmd.RunID, locked.State)
+	}
+
+	// A direct allocation is also a live-slot acquisition. Serialize it with
+	// scheduler admissions so the older HTTP entrypoint cannot bypass the cap.
+	counted := locked.State == "preparing" || locked.State == "coding" ||
+		(locked.LeaseExpiresAt.Valid && locked.LeaseExpiresAt.Time.After(time.Now())) ||
+		(locked.State == "blocked" && locked.ErrorCode.String == "lease_lost")
+	if !counted {
+		live, err := qtx.CountLiveAdmissionSlots(ctx)
+		if err != nil {
+			return application.Allocation{}, fmt.Errorf("count allocation slots: %w", err)
+		}
+		if live >= 3 {
+			return application.Allocation{}, application.ErrAdmissionCap
+		}
 	}
 
 	taskRepo, err := qtx.GetRunTaskRepo(ctx, runID)

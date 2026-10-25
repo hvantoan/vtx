@@ -92,7 +92,6 @@ func TestNonOperationalHopsAreClosed(t *testing.T) {
 	}
 
 	closed := []Request{
-		withState(held, StatePreparing, ActionAdvance, ActorOrchestrator),
 		withState(held, StateCoding, ActionAdvance, ActorOrchestrator),
 		withState(held, StateVerifying, ActionAdvance, ActorOrchestrator),
 		withState(held, StateQA, ActionAdvance, ActorOrchestrator),
