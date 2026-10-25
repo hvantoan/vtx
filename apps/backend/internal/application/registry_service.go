@@ -33,10 +33,11 @@ const maxReasonLength = 500
 
 // RegistryService is the only mutation path for a task run (spec §4).
 type RegistryService struct {
-	store    RegistryStore
-	consumer string
-	clock    Clock
-	logger   *slog.Logger
+	store        RegistryStore
+	consumer     string
+	clock        Clock
+	logger       *slog.Logger
+	retryPlanner RetryPlanner
 }
 
 func NewRegistryService(store RegistryStore, consumer string, clock Clock, logger *slog.Logger) *RegistryService {
@@ -52,6 +53,11 @@ func NewRegistryService(store RegistryStore, consumer string, clock Clock, logge
 // TransitionRun evaluates one transition and persists it. Errors are domain
 // typed errors: not_found, stale_version, stale_lease, already_terminal,
 // invalid_transition, forbidden, stage_not_operational.
+func (s *RegistryService) WithRetryPlanner(p RetryPlanner) *RegistryService {
+	s.retryPlanner = p
+	return s
+}
+
 func (s *RegistryService) TransitionRun(ctx context.Context, cmd TransitionCommand) (RunSnapshot, error) {
 	if err := cmd.validate(); err != nil {
 		return RunSnapshot{}, err
@@ -59,7 +65,18 @@ func (s *RegistryService) TransitionRun(ctx context.Context, cmd TransitionComma
 	now := s.clock.Now()
 
 	run, err := s.store.TransitionRun(ctx, cmd, func(locked RunSnapshot) (TransitionPlan, error) {
-		decision, err := domain.Evaluate(domain.Request{
+		if s.retryPlanner != nil && (cmd.Action == domain.ActionScheduleRetry || cmd.FailureClass != "") {
+			var err error
+			cmd, err = s.retryPlanner.PlanFailure(locked, cmd, now)
+			if err != nil {
+				return TransitionPlan{}, err
+			}
+		}
+		evaluate := domain.Evaluate
+		if guarded, ok := s.store.(GuardedRegistryStore); ok && guarded.HasTransitionGuard(locked.State, cmd.Action) {
+			evaluate = domain.EvaluateWithGuard
+		}
+		decision, err := evaluate(domain.Request{
 			State:              locked.State,
 			PreparationReady:   locked.PreparationReady,
 			Version:            locked.Version,
@@ -191,6 +208,10 @@ func buildTransitionPlan(locked RunSnapshot, cmd TransitionCommand, decision dom
 		Attempt:     locked.Attempt,
 	}
 	reason := sanitizeReason(cmd.Reason)
+	if cmd.FailureClass != "" {
+		update.FailureClass = &cmd.FailureClass
+		update.RetryPolicyVersion = &cmd.RetryPolicyVersion
+	}
 
 	switch cmd.Action {
 	case domain.ActionBegin:
@@ -198,10 +219,16 @@ func buildTransitionPlan(locked RunSnapshot, cmd TransitionCommand, decision dom
 		update.StartedAt = &started
 	case domain.ActionScheduleRetry:
 		due := now.Add(defaultRetryDelay)
+		if cmd.RetryDueAt != nil {
+			due = *cmd.RetryDueAt
+		}
 		update.RetryDueAt = &due
 		update.Attempt = locked.Attempt + 1
 	case domain.ActionFail:
 		code := "run_failed_by_policy"
+		if cmd.ErrorCode != "" {
+			code = cmd.ErrorCode
+		}
 		update.ErrorCode = &code
 		if reason != "" {
 			update.ErrorMessage = &reason
@@ -277,6 +304,9 @@ func projectKeyFromIssueKey(issueKey string) (string, error) {
 }
 
 func (cmd TransitionCommand) validate() error {
+	if cmd.RecoverExpiredLease && (cmd.Actor != domain.ActorPolicy || cmd.ActorType != domain.ActorTypeSystem) {
+		return domain.ErrForbidden
+	}
 	if cmd.RunID == "" {
 		return fmt.Errorf("%w: run_id is required", domain.ErrNotFound)
 	}
@@ -290,3 +320,20 @@ func (cmd TransitionCommand) validate() error {
 }
 
 func isRunNotFound(err error) bool { return errors.Is(err, ErrRunNotFound) }
+
+// MergeRetryMetadata preserves caller context while policy-owned keys win.
+func MergeRetryMetadata(raw []byte, values map[string]any) ([]byte, error) {
+	metadata := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &metadata); err != nil {
+			return nil, fmt.Errorf("retry metadata: %w", err)
+		}
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	for key, value := range values {
+		metadata[key] = value
+	}
+	return json.Marshal(metadata)
+}

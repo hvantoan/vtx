@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AgentEvent struct {
+	EventID   int64              `json:"event_id"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	RunID     pgtype.UUID        `json:"run_id"`
+	Seq       int32              `json:"seq"`
+	EventType string             `json:"event_type"`
+	Payload   string             `json:"payload"`
+	Data      []byte             `json:"data"`
+	EventTs   pgtype.Timestamptz `json:"event_ts"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentSession struct {
 	ID        string             `json:"id"`
 	TaskID    string             `json:"task_id"`
@@ -26,6 +38,32 @@ type DeferredIntent struct {
 	Reason      pgtype.Text        `json:"reason"`
 }
 
+type DeliveryRedrive struct {
+	RedriveID     pgtype.UUID        `json:"redrive_id"`
+	OutboxEventID pgtype.UUID        `json:"outbox_event_id"`
+	ConsumerName  string             `json:"consumer_name"`
+	Actor         string             `json:"actor"`
+	ActorType     string             `json:"actor_type"`
+	Reason        string             `json:"reason"`
+	CorrelationID pgtype.Text        `json:"correlation_id"`
+	RedrivenAt    pgtype.Timestamptz `json:"redriven_at"`
+}
+
+type EvidenceArtifact struct {
+	ArtifactID        pgtype.UUID        `json:"artifact_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	TaskID            pgtype.UUID        `json:"task_id"`
+	Attempt           int32              `json:"attempt"`
+	Kind              string             `json:"kind"`
+	Uri               string             `json:"uri"`
+	Sha256            string             `json:"sha256"`
+	CommitSha         string             `json:"commit_sha"`
+	Producer          string             `json:"producer"`
+	ProducerSessionID pgtype.Text        `json:"producer_session_id"`
+	Metadata          []byte             `json:"metadata"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
 type ExecutionIntent struct {
 	IntentID       pgtype.UUID        `json:"intent_id"`
 	Source         string             `json:"source"`
@@ -34,6 +72,23 @@ type ExecutionIntent struct {
 	Status         string             `json:"status"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GateDecision struct {
+	DecisionID       pgtype.UUID        `json:"decision_id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	Attempt          int32              `json:"attempt"`
+	SubjectCommitSha string             `json:"subject_commit_sha"`
+	VerifiedHeadSha  pgtype.Text        `json:"verified_head_sha"`
+	PolicyName       string             `json:"policy_name"`
+	PolicyVersion    string             `json:"policy_version"`
+	Decision         string             `json:"decision"`
+	Conditions       []byte             `json:"conditions"`
+	BlockingReasons  []string           `json:"blocking_reasons"`
+	Evaluator        string             `json:"evaluator"`
+	CorrelationID    pgtype.Text        `json:"correlation_id"`
+	EvaluatedAt      pgtype.Timestamptz `json:"evaluated_at"`
 }
 
 type InboxConsumption struct {
@@ -73,6 +128,27 @@ type OutboxEvent struct {
 	NextAttemptAt    pgtype.Timestamptz `json:"next_attempt_at"`
 	DeadLetteredAt   pgtype.Timestamptz `json:"dead_lettered_at"`
 	DeadLetterReason pgtype.Text        `json:"dead_letter_reason"`
+}
+
+type QaVerdict struct {
+	VerdictID       pgtype.UUID        `json:"verdict_id"`
+	RunID           pgtype.UUID        `json:"run_id"`
+	TaskID          pgtype.UUID        `json:"task_id"`
+	Attempt         int32              `json:"attempt"`
+	CommitSha       string             `json:"commit_sha"`
+	Verdict         string             `json:"verdict"`
+	Findings        []byte             `json:"findings"`
+	QaSessionID     string             `json:"qa_session_id"`
+	QaAgentIdentity string             `json:"qa_agent_identity"`
+	CodingSessionID pgtype.Text        `json:"coding_session_id"`
+	EvaluatedAt     pgtype.Timestamptz `json:"evaluated_at"`
+	CorrelationID   pgtype.Text        `json:"correlation_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type QaVerdictEvidence struct {
+	VerdictID  pgtype.UUID `json:"verdict_id"`
+	ArtifactID pgtype.UUID `json:"artifact_id"`
 }
 
 type RegistryTask struct {
@@ -122,28 +198,30 @@ type TaskEvent struct {
 }
 
 type TaskRun struct {
-	RunID          pgtype.UUID        `json:"run_id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	IntentID       pgtype.UUID        `json:"intent_id"`
-	CorrelationID  pgtype.Text        `json:"correlation_id"`
-	OriginEventID  pgtype.UUID        `json:"origin_event_id"`
-	ChangelogID    pgtype.Text        `json:"changelog_id"`
-	State          string             `json:"state"`
-	Version        int64              `json:"version"`
-	Attempt        int32              `json:"attempt"`
-	ResumeState    pgtype.Text        `json:"resume_state"`
-	RetryDueAt     pgtype.Timestamptz `json:"retry_due_at"`
-	CommitSha      pgtype.Text        `json:"commit_sha"`
-	Branch         pgtype.Text        `json:"branch"`
-	ErrorCode      pgtype.Text        `json:"error_code"`
-	ErrorMessage   pgtype.Text        `json:"error_message"`
-	LeaseOwner     pgtype.Text        `json:"lease_owner"`
-	LeaseEpoch     int64              `json:"lease_epoch"`
-	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	RunID              pgtype.UUID        `json:"run_id"`
+	TaskID             pgtype.UUID        `json:"task_id"`
+	IntentID           pgtype.UUID        `json:"intent_id"`
+	CorrelationID      pgtype.Text        `json:"correlation_id"`
+	OriginEventID      pgtype.UUID        `json:"origin_event_id"`
+	ChangelogID        pgtype.Text        `json:"changelog_id"`
+	State              string             `json:"state"`
+	Version            int64              `json:"version"`
+	Attempt            int32              `json:"attempt"`
+	ResumeState        pgtype.Text        `json:"resume_state"`
+	RetryDueAt         pgtype.Timestamptz `json:"retry_due_at"`
+	CommitSha          pgtype.Text        `json:"commit_sha"`
+	Branch             pgtype.Text        `json:"branch"`
+	ErrorCode          pgtype.Text        `json:"error_code"`
+	ErrorMessage       pgtype.Text        `json:"error_message"`
+	LeaseOwner         pgtype.Text        `json:"lease_owner"`
+	LeaseEpoch         int64              `json:"lease_epoch"`
+	LeaseExpiresAt     pgtype.Timestamptz `json:"lease_expires_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	FailureClass       pgtype.Text        `json:"failure_class"`
+	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
 }
 
 type TaskRunEvent struct {

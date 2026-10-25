@@ -1,11 +1,10 @@
-
 -- +goose Up
 -- +goose StatementBegin
 -- VTX-8: one row per verification suite execution, keyed to the EXACT commit
 -- SHA evaluated. Append-only: retries insert a new attempt; nothing updates a
 -- terminal verdict — only 'running' rows may transition to a terminal status.
 CREATE TABLE IF NOT EXISTS verification_runs (
-    -- kind reconciled with vtx-6 §3: baseline rows run on base_sha before the
+    -- kind reconciled with vtx-6: baseline rows run on base_sha before the
     -- agent; verification rows run on the agent commit.
     kind TEXT NOT NULL DEFAULT 'verification' CHECK (kind IN ('baseline', 'verification')),
     verification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -13,7 +12,7 @@ CREATE TABLE IF NOT EXISTS verification_runs (
     attempt     INT  NOT NULL,                    -- verification attempt (>=1), independent of agent attempt
     suite       TEXT NOT NULL,                    -- 'make-test-boundaries' | 'make-vet' | ...
     command     TEXT NOT NULL,                    -- exact argv rendered, e.g. 'make -C <path> test'
-    subject_commit_sha  TEXT NOT NULL,                    -- HEAD at suite start — FR-QA-003 anchor
+    subject_commit_sha  TEXT NOT NULL,            -- HEAD at suite start — FR-QA-003 anchor
     status      TEXT NOT NULL CHECK (status IN (
         'running','passed','failed','error','timeout','skipped','superseded')),
     exit_code   INT,

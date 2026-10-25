@@ -61,37 +61,39 @@ func (q *Queries) FinishRunBaseline(ctx context.Context, arg FinishRunBaselinePa
 }
 
 const getRequirementInput = `-- name: GetRequirementInput :one
-SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, t.jira_site_id, t.jira_issue_id, t.jira_issue_key, t.project_key
+SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.failure_class, r.retry_policy_version, t.jira_site_id, t.jira_issue_id, t.jira_issue_key, t.project_key
 FROM task_runs r JOIN registry_tasks t ON t.id = r.task_id WHERE r.run_id = $1
 `
 
 type GetRequirementInputRow struct {
-	RunID          pgtype.UUID        `json:"run_id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	IntentID       pgtype.UUID        `json:"intent_id"`
-	CorrelationID  pgtype.Text        `json:"correlation_id"`
-	OriginEventID  pgtype.UUID        `json:"origin_event_id"`
-	ChangelogID    pgtype.Text        `json:"changelog_id"`
-	State          string             `json:"state"`
-	Version        int64              `json:"version"`
-	Attempt        int32              `json:"attempt"`
-	ResumeState    pgtype.Text        `json:"resume_state"`
-	RetryDueAt     pgtype.Timestamptz `json:"retry_due_at"`
-	CommitSha      pgtype.Text        `json:"commit_sha"`
-	Branch         pgtype.Text        `json:"branch"`
-	ErrorCode      pgtype.Text        `json:"error_code"`
-	ErrorMessage   pgtype.Text        `json:"error_message"`
-	LeaseOwner     pgtype.Text        `json:"lease_owner"`
-	LeaseEpoch     int64              `json:"lease_epoch"`
-	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
-	JiraSiteID     string             `json:"jira_site_id"`
-	JiraIssueID    string             `json:"jira_issue_id"`
-	JiraIssueKey   string             `json:"jira_issue_key"`
-	ProjectKey     string             `json:"project_key"`
+	RunID              pgtype.UUID        `json:"run_id"`
+	TaskID             pgtype.UUID        `json:"task_id"`
+	IntentID           pgtype.UUID        `json:"intent_id"`
+	CorrelationID      pgtype.Text        `json:"correlation_id"`
+	OriginEventID      pgtype.UUID        `json:"origin_event_id"`
+	ChangelogID        pgtype.Text        `json:"changelog_id"`
+	State              string             `json:"state"`
+	Version            int64              `json:"version"`
+	Attempt            int32              `json:"attempt"`
+	ResumeState        pgtype.Text        `json:"resume_state"`
+	RetryDueAt         pgtype.Timestamptz `json:"retry_due_at"`
+	CommitSha          pgtype.Text        `json:"commit_sha"`
+	Branch             pgtype.Text        `json:"branch"`
+	ErrorCode          pgtype.Text        `json:"error_code"`
+	ErrorMessage       pgtype.Text        `json:"error_message"`
+	LeaseOwner         pgtype.Text        `json:"lease_owner"`
+	LeaseEpoch         int64              `json:"lease_epoch"`
+	LeaseExpiresAt     pgtype.Timestamptz `json:"lease_expires_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	FailureClass       pgtype.Text        `json:"failure_class"`
+	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
+	JiraSiteID         string             `json:"jira_site_id"`
+	JiraIssueID        string             `json:"jira_issue_id"`
+	JiraIssueKey       string             `json:"jira_issue_key"`
+	ProjectKey         string             `json:"project_key"`
 }
 
 func (q *Queries) GetRequirementInput(ctx context.Context, runID pgtype.UUID) (GetRequirementInputRow, error) {
@@ -120,6 +122,8 @@ func (q *Queries) GetRequirementInput(ctx context.Context, runID pgtype.UUID) (G
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.FailureClass,
+		&i.RetryPolicyVersion,
 		&i.JiraSiteID,
 		&i.JiraIssueID,
 		&i.JiraIssueKey,

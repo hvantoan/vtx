@@ -25,6 +25,8 @@ import (
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
 	"github.com/vtx/platform/internal/persistence"
+	"github.com/vtx/platform/internal/retry"
+	"time"
 )
 
 // reconcileScheduleID is the stable schedule identity: creating it twice is a
@@ -203,6 +205,17 @@ func runRegistryDispatcher() {
 		application.SystemClock{},
 		logger,
 	)
+	registry.WithRetryPlanner(retry.DefaultPolicy())
+	// Recovery is independent of Temporal availability, just like intake.
+	retryService := &retry.Service{Store: persistence.NewPgRetryStore(database.Pool, database.Queries), Registry: registry, Logger: logger}
+	recoveryDone := make(chan struct{})
+	go func() {
+		defer close(recoveryDone)
+		if err := retryService.Run(ctx, time.Second); err != nil {
+			logger.Error("retry recovery stopped", "error", err)
+		}
+	}()
+	defer func() { stop(); <-recoveryDone }()
 	handlers := map[string]application.EventHandler{
 		application.OutboxEventExecutionIntentCreated: func(ctx context.Context, payload []byte) error {
 			_, err := registry.ConsumeIntent(ctx, payload)

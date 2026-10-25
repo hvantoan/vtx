@@ -67,7 +67,6 @@ const (
 // Validation errors. Their HTTP statuses are fixed by spec §0.D; the transport
 // layer maps them by identity, so the codes must stay stable.
 var (
-	ErrEvidenceInvalid   = errors.New("registry: evidence invalid")
 	ErrNotFound          = errors.New("registry: run not found")
 	ErrStaleVersion      = errors.New("registry: stale version")
 	ErrStaleLease        = errors.New("registry: stale lease")
@@ -90,7 +89,10 @@ func HTTPStatusForError(err error) int {
 		return 404
 	case errors.Is(err, ErrStaleVersion), errors.Is(err, ErrStaleLease),
 		errors.Is(err, ErrAlreadyTerminal), errors.Is(err, ErrInvalidTransition),
-		errors.Is(err, ErrConflictActiveRun), errors.Is(err, ErrStageNotOperational), errors.Is(err, ErrEvidenceInvalid):
+		errors.Is(err, ErrConflictActiveRun), errors.Is(err, ErrStageNotOperational),
+		errors.Is(err, ErrEvidenceInvalid), errors.Is(err, ErrQAVerdictConflict),
+		errors.Is(err, ErrQASessionNotUnique), errors.Is(err, ErrQAEvidenceMissing),
+		errors.Is(err, ErrQASHAMismatch), errors.Is(err, ErrQARunNotInQA):
 		return 409
 	case errors.Is(err, ErrForbidden):
 		return 403
@@ -259,7 +261,24 @@ func (a Action) isPolicyAction() bool {
 	}
 }
 
-// Evaluate applies the state machine. Error classes are checked in this order:
+// Evaluate applies the state machine. It never approves a non-operational
+// hop: use EvaluateWithGuard only from inside an EvidenceGuard-backed
+// transition (VTX-10), where the guard — not the table flag — is the
+// operationality+evidence proof.
+func Evaluate(req Request, now time.Time) (Decision, error) {
+	return evaluate(req, now, false)
+}
+
+// EvaluateWithGuard is identical to Evaluate except a contract-valid hop
+// flagged non-operational is approved: the caller's EvidenceGuard has already
+// verified the required evidence inside the transition tx, which is the
+// VTX-10 definition of "operational". A caller without a registered guard
+// must use Evaluate — the table stays the closed default.
+func EvaluateWithGuard(req Request, now time.Time) (Decision, error) {
+	return evaluate(req, now, true)
+}
+
+// evaluate applies the state machine. Error classes are checked in this order:
 //
 //  1. stale_version    — someone else advanced the run
 //  2. already_terminal — terminal runs never move (I-06)
@@ -276,7 +295,7 @@ func (a Action) isPolicyAction() bool {
 // which is what negative tests and API consumers need. All five §0.D classes
 // stay distinguishable, which is the property the order exists to protect.
 // (not_found is decided by the repository before this is called.)
-func Evaluate(req Request, now time.Time) (Decision, error) {
+func evaluate(req Request, now time.Time, allowGuarded bool) (Decision, error) {
 	if req.Version != req.ExpectedVersion {
 		return Decision{}, fmt.Errorf("%w: have %d, expected %d", ErrStaleVersion, req.Version, req.ExpectedVersion)
 	}
@@ -298,7 +317,7 @@ func Evaluate(req Request, now time.Time) (Decision, error) {
 		return Decision{}, fmt.Errorf("%w: actor %s may not %s from %s", ErrForbidden, req.Actor, req.Action, req.State)
 	}
 
-	if !row.operational {
+	if !row.operational && !allowGuarded {
 		return Decision{}, fmt.Errorf("%w: %s --%s-->", ErrStageNotOperational, req.State, req.Action)
 	}
 
