@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "VTX-5 — Kết quả dự kiến, chưa triển khai",
+    "subtitle": "Chờ xác nhận phạm vi. Giới hạn 3 áp dụng riêng coding; không giới hạn tổng CPU/RAM toàn pipeline.",
+    "description": "Nghiệm thu hàng đợi, slot, concurrency và metrics thật. Evidence 3 agent thực tế: chưa đạt, chờ VTX-7."
+  },
+  "components": [
+    {
+      "id": "prepare",
+      "label": "Chuẩn bị worktree",
+      "role": "worker",
+      "layer": 0,
+      "description": "Không chiếm slot coding."
+    },
+    {
+      "id": "jira",
+      "label": "Dependency từ Jira",
+      "role": "external",
+      "layer": 0,
+      "description": "is blocked by: issue chặn phải Done. Giả định đề xuất: không đọc được Jira thì chưa cấp slot."
+    },
+    {
+      "id": "queue",
+      "label": "Hàng đợi coding",
+      "role": "queue",
+      "layer": 1,
+      "description": "Chỉ task sẵn sàng; priority Jira rồi FIFO. Bỏ qua task bị chặn; task đã hủy không được nhận slot."
+    },
+    {
+      "id": "slots",
+      "label": "3 slot toàn hệ thống",
+      "role": "database",
+      "layer": 2,
+      "description": "Cấp phát bền vững, nguyên tử giữa nhiều worker; không cấp trùng cùng task."
+    },
+    {
+      "id": "coding",
+      "label": "Agent coding — VTX-7",
+      "role": "worker",
+      "layer": 3,
+      "description": "Chỉ coding chiếm slot. Ba agent chạy thực tế chưa được chứng minh trong VTX-5."
+    },
+    {
+      "id": "lost",
+      "label": "Mất heartbeat: giữ slot",
+      "role": "backend",
+      "layer": 4,
+      "description": "Không xác nhận được agent đã dừng thì chặn, chờ người xử lý."
+    },
+    {
+      "id": "release",
+      "label": "Xác nhận agent đã dừng",
+      "role": "backend",
+      "layer": 5,
+      "description": "Kết thúc, hủy hoặc lỗi đều chỉ trả slot sau xác nhận dừng."
+    },
+    {
+      "id": "qa",
+      "label": "Kiểm tra / QA",
+      "role": "worker",
+      "layer": 6,
+      "description": "Không chiếm slot coding. Xung đột module do người quản lý."
+    }
+  ],
+  "connections": [
+    {
+      "to": "queue",
+      "label": "Sẵn sàng coding",
+      "kind": "async",
+      "from": "prepare"
+    },
+    {
+      "to": "queue",
+      "label": "Kiểm tra trước cấp slot",
+      "kind": "async",
+      "from": "jira"
+    },
+    {
+      "to": "slots",
+      "label": "Chọn task đủ điều kiện",
+      "kind": "async",
+      "from": "queue"
+    },
+    {
+      "to": "coding",
+      "label": "Cấp quyền coding",
+      "kind": "async",
+      "from": "slots"
+    },
+    {
+      "to": "lost",
+      "label": "Mất heartbeat",
+      "kind": "async",
+      "from": "coding"
+    },
+    {
+      "to": "release",
+      "label": "Coding kết thúc",
+      "kind": "async",
+      "from": "coding"
+    },
+    {
+      "to": "release",
+      "label": "Đã xác nhận dừng",
+      "kind": "async",
+      "from": "lost"
+    },
+    {
+      "to": "qa",
+      "label": "Trả slot rồi kiểm tra",
+      "kind": "async",
+      "from": "release"
+    }
+  ]
+}

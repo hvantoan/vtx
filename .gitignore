@@ -54,3 +54,6 @@ infra/storage/data/
 test-results/
 playwright-report/
 blob-report/
+.pi/
+__pycache__/
+*.pyc
