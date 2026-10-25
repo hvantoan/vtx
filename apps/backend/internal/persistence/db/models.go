@@ -36,6 +36,23 @@ type ExecutionIntent struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GateDecision struct {
+	DecisionID       pgtype.UUID        `json:"decision_id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	Attempt          int32              `json:"attempt"`
+	SubjectCommitSha string             `json:"subject_commit_sha"`
+	VerifiedHeadSha  pgtype.Text        `json:"verified_head_sha"`
+	PolicyName       string             `json:"policy_name"`
+	PolicyVersion    string             `json:"policy_version"`
+	Decision         string             `json:"decision"`
+	Conditions       []byte             `json:"conditions"`
+	BlockingReasons  []string           `json:"blocking_reasons"`
+	Evaluator        string             `json:"evaluator"`
+	CorrelationID    pgtype.Text        `json:"correlation_id"`
+	EvaluatedAt      pgtype.Timestamptz `json:"evaluated_at"`
+}
+
 type InboxConsumption struct {
 	ConsumerName  string             `json:"consumer_name"`
 	SourceEventID pgtype.UUID        `json:"source_event_id"`
@@ -73,6 +90,30 @@ type OutboxEvent struct {
 	NextAttemptAt    pgtype.Timestamptz `json:"next_attempt_at"`
 	DeadLetteredAt   pgtype.Timestamptz `json:"dead_lettered_at"`
 	DeadLetterReason pgtype.Text        `json:"dead_letter_reason"`
+	RedriveCount     int32              `json:"redrive_count"`
+}
+
+type PullRequest struct {
+	PrID         pgtype.UUID        `json:"pr_id"`
+	RunID        pgtype.UUID        `json:"run_id"`
+	RepoOwner    string             `json:"repo_owner"`
+	RepoName     string             `json:"repo_name"`
+	PrNumber     pgtype.Int4        `json:"pr_number"`
+	PrUrl        pgtype.Text        `json:"pr_url"`
+	Draft        bool               `json:"draft"`
+	HeadBranch   string             `json:"head_branch"`
+	HeadSha      string             `json:"head_sha"`
+	BaseBranch   string             `json:"base_branch"`
+	Status       string             `json:"status"`
+	GithubPrID   pgtype.Int8        `json:"github_pr_id"`
+	CiStatus     pgtype.Text        `json:"ci_status"`
+	LastSyncedAt pgtype.Timestamptz `json:"last_synced_at"`
+	OpenedAt     pgtype.Timestamptz `json:"opened_at"`
+	ClosedAt     pgtype.Timestamptz `json:"closed_at"`
+	ErrorCode    pgtype.Text        `json:"error_code"`
+	ErrorDetail  pgtype.Text        `json:"error_detail"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type RegistryTask struct {
@@ -129,6 +170,7 @@ type TaskRun struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 	StartedAt      pgtype.Timestamptz `json:"started_at"`
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	PrUrl          pgtype.Text        `json:"pr_url"`
 }
 
 type TaskRunEvent struct {

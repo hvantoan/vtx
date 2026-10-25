@@ -131,7 +131,7 @@ func TestTransitionRunTranslatesMissingRow(t *testing.T) {
 func TestTransitionRunWritesNothingWhenTheDomainRejects(t *testing.T) {
 	now := time.Date(2026, 10, 19, 6, 30, 0, 0, time.UTC)
 	store := &fakeStore{snapshot: application.RunSnapshot{
-		RunID: "run-1", TaskID: "task-1", IntentID: "intent-1", State: domain.StatePRDraft, Version: 7,
+		RunID: "run-1", TaskID: "task-1", IntentID: "intent-1", State: domain.StateQA, Version: 7,
 		LeaseOwner: new("orchestrator-1"), LeaseEpoch: 1, LeaseExpiresAt: new(now.Add(time.Minute)),
 	}}
 	svc := testService(store, now)
@@ -140,7 +140,7 @@ func TestTransitionRunWritesNothingWhenTheDomainRejects(t *testing.T) {
 	// still must not run (gate G4).
 	_, err := svc.TransitionRun(context.Background(), application.TransitionCommand{
 		RunID: "run-1", ExpectedVersion: 7, ExpectedLeaseEpoch: 1,
-		Action: domain.ActionComplete, Actor: domain.ActorOrchestrator,
+		Action: domain.ActionAdvance, Actor: domain.ActorOrchestrator,
 	})
 	if !errors.Is(err, domain.ErrStageNotOperational) {
 		t.Fatalf("got %v, want ErrStageNotOperational", err)

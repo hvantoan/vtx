@@ -165,7 +165,7 @@ var stageAdvance = []State{
 func transitionTable() map[transitionKey]transition {
 	rows := []transition{
 		{key: transitionKey{StateQueued, ActionBegin}, to: StatePreparing, actors: []Actor{ActorScheduler}, operational: true},
-		{key: transitionKey{StatePRDraft, ActionComplete}, to: StateCompleted, actors: []Actor{ActorOrchestrator}, operational: false},
+		{key: transitionKey{StatePRDraft, ActionComplete}, to: StateCompleted, actors: []Actor{ActorOrchestrator}, operational: true},
 	}
 	for i, from := range stageAdvance {
 		if i+1 >= len(stageAdvance) {
@@ -175,7 +175,7 @@ func transitionTable() map[transitionKey]transition {
 			key:         transitionKey{from, ActionAdvance},
 			to:          stageAdvance[i+1],
 			actors:      []Actor{ActorOrchestrator},
-			operational: false,
+			operational: from == StateQualityGate,
 		})
 	}
 

@@ -37,7 +37,11 @@ type Querier interface {
 	// inbox rows are kept as the dedup/audit record.
 	DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error)
 	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
+	GetGateVerdict(ctx context.Context, arg GetGateVerdictParams) (GetGateVerdictRow, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
+	GetPRRunContext(ctx context.Context, runID pgtype.UUID) (GetPRRunContextRow, error)
+	GetPullRequestByNumber(ctx context.Context, arg GetPullRequestByNumberParams) (PullRequest, error)
+	GetPullRequestByRun(ctx context.Context, runID pgtype.UUID) (PullRequest, error)
 	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
 	// Lightweight lease read for fencing checks that do not need the whole row.
 	GetRunLeaseState(ctx context.Context, runID pgtype.UUID) (GetRunLeaseStateRow, error)
@@ -69,6 +73,9 @@ type Querier interface {
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error)
+	// VTX-12 draft pull-request persistence.
+	InsertPullRequest(ctx context.Context, arg InsertPullRequestParams) (PullRequest, error)
+	InsertPullRequestOpenedEvent(ctx context.Context, arg InsertPullRequestOpenedEventParams) error
 	// run_id comes from gen_random_uuid() — never from the Go process.
 	InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) (TaskRun, error)
 	// I-05: the creation row is version 0 with previous_state = '' (a run is born,
@@ -90,6 +97,7 @@ type Querier interface {
 	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
 	// FIFO order is the contract for the admission path (VTX-5).
 	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
+	ListPullRequestsByStatus(ctx context.Context, arg ListPullRequestsByStatusParams) ([]PullRequest, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	// Cursor on version, and the creation audit (version 0) must be reachable:
 	// a NULL cursor means "from the beginning", not "after 0".
@@ -102,6 +110,7 @@ type Querier interface {
 	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
 	// second ACK for the same event reports 0 rows.
 	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)
+	MarkPullRequestStatus(ctx context.Context, arg MarkPullRequestStatusParams) (PullRequest, error)
 	// Guarded transition: 0 rows means the worktree already moved on (a
 	// reconciler raced a release) and the caller must re-read.
 	MarkWorktreeStatus(ctx context.Context, arg MarkWorktreeStatusParams) (Worktree, error)
@@ -126,8 +135,10 @@ type Querier interface {
 	// The allocated branch is persisted on the VTX-3 run row — VTX-4 does not
 	// duplicate it into a new run-level column.
 	SetRunBranch(ctx context.Context, arg SetRunBranchParams) error
+	SetRunPrURL(ctx context.Context, arg SetRunPrURLParams) error
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.
 	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
+	UpdatePullRequestSync(ctx context.Context, arg UpdatePullRequestSyncParams) (PullRequest, error)
 	// CAS on version. Called only after GetTaskRunForUpdate; `WHERE version = $10`
 	// is the second line of defence (0 rows ⇒ caller treats it as stale_version).
 	UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunStateParams) (TaskRun, error)

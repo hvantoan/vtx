@@ -58,6 +58,16 @@ type Config struct {
 	// task_runs (e.g. "worker-1", "scheduler"). Empty → service default.
 	WorktreeOwner string
 
+	// VTX-12 draft PR integration.
+	GitHubToken         string
+	GitHubAPIBaseURL    string
+	GitHubRepoAllowlist []string
+	PRBaseBranch        string
+
+	// VTX-13 operator measurements.
+	WorkerHeartbeatInterval time.Duration
+	WorkerStaleFactor       int
+
 	// Legacy env fallback inputs — read in Load(), consumed by
 	// loadJiraIntake(), never read by downstream code.
 	JiraProjectAllowlist  []string
@@ -95,12 +105,18 @@ func Load() *Config {
 		RegistryConsumerName: getEnv("REGISTRY_CONSUMER_NAME", "registry-intake"),
 
 		// VTX-4 worktree lifecycle.
-		WorktreeRoot:           getEnv("WORKTREE_ROOT", "./var/worktrees"),
-		WorktreeQuarantineRoot: getEnv("WORKTREE_QUARANTINE_ROOT", "./var/worktrees-quarantine"),
-		RepoCacheRoot:          getEnv("REPO_CACHE_ROOT", "./var/repo-cache"),
-		WorktreeLeaseTTL:       getEnvAsDuration("WORKTREE_LEASE_TTL", 2*time.Minute),
-		WorktreeReconcileEvery: getEnvAsDuration("WORKTREE_RECONCILE_INTERVAL", 5*time.Minute),
-		WorktreeOwner:          getEnv("WORKTREE_OWNER", ""),
+		WorktreeRoot:            getEnv("WORKTREE_ROOT", "./var/worktrees"),
+		WorktreeQuarantineRoot:  getEnv("WORKTREE_QUARANTINE_ROOT", "./var/worktrees-quarantine"),
+		RepoCacheRoot:           getEnv("REPO_CACHE_ROOT", "./var/repo-cache"),
+		WorktreeLeaseTTL:        getEnvAsDuration("WORKTREE_LEASE_TTL", 2*time.Minute),
+		WorktreeReconcileEvery:  getEnvAsDuration("WORKTREE_RECONCILE_INTERVAL", 5*time.Minute),
+		WorktreeOwner:           getEnv("WORKTREE_OWNER", ""),
+		GitHubToken:             getEnv("GITHUB_TOKEN", ""),
+		GitHubAPIBaseURL:        getEnv("GITHUB_API_BASE_URL", "https://api.github.com"),
+		GitHubRepoAllowlist:     splitCSV(getEnv("GITHUB_REPO_ALLOWLIST", "")),
+		PRBaseBranch:            getEnv("PR_BASE_BRANCH", "dev"),
+		WorkerHeartbeatInterval: getEnvAsDuration("WORKER_HEARTBEAT_INTERVAL", 15*time.Second),
+		WorkerStaleFactor:       getEnvAsInt("WORKER_STALE_FACTOR", 3),
 		RegistryActorTokens: map[domain.Actor]string{
 			domain.ActorScheduler:    getEnv("REGISTRY_ACTOR_SCHEDULER_TOKEN", ""),
 			domain.ActorOrchestrator: getEnv("REGISTRY_ACTOR_ORCHESTRATOR_TOKEN", ""),
