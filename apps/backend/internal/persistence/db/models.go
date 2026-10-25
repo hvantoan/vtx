@@ -87,6 +87,21 @@ type RegistryTask struct {
 	RepoUrl      pgtype.Text        `json:"repo_url"`
 }
 
+type RunRequirement struct {
+	RunID              pgtype.UUID        `json:"run_id"`
+	IntentID           pgtype.UUID        `json:"intent_id"`
+	JiraSiteID         string             `json:"jira_site_id"`
+	IssueID            string             `json:"issue_id"`
+	IssueKey           string             `json:"issue_key"`
+	RequirementVersion string             `json:"requirement_version"`
+	RequirementHash    string             `json:"requirement_hash"`
+	Summary            string             `json:"summary"`
+	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
+	IssueSnapshot      []byte             `json:"issue_snapshot"`
+	FetchedAt          pgtype.Timestamptz `json:"fetched_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
 type Task struct {
 	ID            string             `json:"id"`
 	Title         string             `json:"title"`
@@ -145,6 +160,26 @@ type TaskRunEvent struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type VerificationRun struct {
+	Kind             string             `json:"kind"`
+	VerificationID   pgtype.UUID        `json:"verification_id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	Attempt          int32              `json:"attempt"`
+	Suite            string             `json:"suite"`
+	Command          string             `json:"command"`
+	SubjectCommitSha string             `json:"subject_commit_sha"`
+	Status           string             `json:"status"`
+	ExitCode         pgtype.Int4        `json:"exit_code"`
+	DurationMs       pgtype.Int4        `json:"duration_ms"`
+	LogRef           pgtype.Text        `json:"log_ref"`
+	LogTail          pgtype.Text        `json:"log_tail"`
+	LogDigest        pgtype.Text        `json:"log_digest"`
+	ErrorDetail      pgtype.Text        `json:"error_detail"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type WebhookReceipt struct {
 	ReceiptID   pgtype.UUID        `json:"receipt_id"`
 	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
@@ -155,6 +190,17 @@ type WebhookReceipt struct {
 	IssueKey    pgtype.Text        `json:"issue_key"`
 	ErrorDetail pgtype.Text        `json:"error_detail"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type WorkerHeartbeat struct {
+	WorkerID   string             `json:"worker_id"`
+	WorkerKind string             `json:"worker_kind"`
+	RunID      pgtype.UUID        `json:"run_id"`
+	Queue      pgtype.Text        `json:"queue"`
+	ActiveRuns int32              `json:"active_runs"`
+	LastBeatAt pgtype.Timestamptz `json:"last_beat_at"`
+	Metadata   []byte             `json:"metadata"`
+	StartedAt  pgtype.Timestamptz `json:"started_at"`
 }
 
 type Worktree struct {

@@ -166,6 +166,8 @@ func (s *Server) writeRegistryServiceError(w http.ResponseWriter, err error) {
 		code = "invalid_transition"
 	case errors.Is(err, domain.ErrConflictActiveRun):
 		code = "conflict_active_run"
+	case errors.Is(err, domain.ErrEvidenceInvalid):
+		code = "evidence_invalid"
 	case errors.Is(err, domain.ErrStageNotOperational):
 		code = "stage_not_operational"
 	case errors.Is(err, domain.ErrForbidden):
@@ -207,6 +209,8 @@ func registryErrorMessage(code string) string {
 		return "transition is not valid for the current state"
 	case "conflict_active_run":
 		return "task already has an active run"
+	case "evidence_invalid":
+		return "requirement and base-SHA baseline evidence are required"
 	case "stage_not_operational":
 		return "transition target is not operational in phase 1"
 	case "forbidden":
@@ -225,25 +229,27 @@ func actorTypeFor(actor domain.Actor) domain.ActorType {
 }
 
 type runResponse struct {
-	RunID          string  `json:"run_id"`
-	TaskID         string  `json:"task_id"`
-	State          string  `json:"state"`
-	Version        int64   `json:"version"`
-	Attempt        int32   `json:"attempt"`
-	ResumeState    *string `json:"resume_state,omitempty"`
-	RetryDueAt     *string `json:"retry_due_at,omitempty"`
-	CommitSHA      *string `json:"commit_sha,omitempty"`
-	Branch         *string `json:"branch,omitempty"`
-	ErrorCode      *string `json:"error_code,omitempty"`
-	ErrorMessage   *string `json:"error_message,omitempty"`
-	LeaseOwner     *string `json:"lease_owner,omitempty"`
-	LeaseEpoch     int64   `json:"lease_epoch"`
-	LeaseExpiresAt *string `json:"lease_expires_at,omitempty"`
-	CorrelationID  string  `json:"correlation_id,omitempty"`
-	CreatedAt      string  `json:"created_at,omitempty"`
-	UpdatedAt      string  `json:"updated_at,omitempty"`
-	StartedAt      *string `json:"started_at,omitempty"`
-	FinishedAt     *string `json:"finished_at,omitempty"`
+	Requirement    json.RawMessage `json:"requirement,omitempty"`
+	Baseline       json.RawMessage `json:"baseline,omitempty"`
+	RunID          string          `json:"run_id"`
+	TaskID         string          `json:"task_id"`
+	State          string          `json:"state"`
+	Version        int64           `json:"version"`
+	Attempt        int32           `json:"attempt"`
+	ResumeState    *string         `json:"resume_state,omitempty"`
+	RetryDueAt     *string         `json:"retry_due_at,omitempty"`
+	CommitSHA      *string         `json:"commit_sha,omitempty"`
+	Branch         *string         `json:"branch,omitempty"`
+	ErrorCode      *string         `json:"error_code,omitempty"`
+	ErrorMessage   *string         `json:"error_message,omitempty"`
+	LeaseOwner     *string         `json:"lease_owner,omitempty"`
+	LeaseEpoch     int64           `json:"lease_epoch"`
+	LeaseExpiresAt *string         `json:"lease_expires_at,omitempty"`
+	CorrelationID  string          `json:"correlation_id,omitempty"`
+	CreatedAt      string          `json:"created_at,omitempty"`
+	UpdatedAt      string          `json:"updated_at,omitempty"`
+	StartedAt      *string         `json:"started_at,omitempty"`
+	FinishedAt     *string         `json:"finished_at,omitempty"`
 }
 
 func runResponseOf(run application.RunSnapshot) runResponse {
@@ -261,6 +267,7 @@ func runResponseOf(run application.RunSnapshot) runResponse {
 
 func runViewResponseOf(run application.RunView) runViewResponse {
 	return runViewResponse{
+		Requirement: run.Requirement, Baseline: run.Baseline,
 		RunID: run.RunID, TaskID: run.TaskID, State: string(run.State),
 		Version: run.Version, Attempt: run.Attempt,
 		ResumeState: stateString(run.ResumeState),

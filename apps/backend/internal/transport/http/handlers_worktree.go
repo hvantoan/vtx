@@ -92,6 +92,8 @@ func (s *Server) HandleWorktreeAllocate(w http.ResponseWriter, r *http.Request) 
 		switch {
 		case errors.Is(err, application.ErrRunNotFound):
 			writeRegistryError(w, http.StatusNotFound, "not_found", err.Error())
+		case errors.Is(err, application.ErrAdmissionCap):
+			writeRegistryError(w, http.StatusConflict, "admission_full", "all three execution slots are occupied")
 		case errors.Is(err, application.ErrWorktreeRunTerminal):
 			writeRegistryError(w, http.StatusConflict, "run_terminal", err.Error())
 		case errors.Is(err, application.ErrWorktreeNoRepo):

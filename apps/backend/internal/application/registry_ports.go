@@ -37,21 +37,22 @@ var (
 
 // RunSnapshot is a task_runs row as the domain needs it.
 type RunSnapshot struct {
-	RunID          string
-	TaskID         string
-	IntentID       string
-	State          domain.State
-	Version        int64
-	Attempt        int32
-	ResumeState    *domain.State
-	RetryDueAt     *time.Time
-	LeaseOwner     *string
-	LeaseEpoch     int64
-	LeaseExpiresAt *time.Time
-	CorrelationID  string
-	CommitSHA      *string
-	StartedAt      *time.Time
-	FinishedAt     *time.Time
+	PreparationReady bool
+	RunID            string
+	TaskID           string
+	IntentID         string
+	State            domain.State
+	Version          int64
+	Attempt          int32
+	ResumeState      *domain.State
+	RetryDueAt       *time.Time
+	LeaseOwner       *string
+	LeaseEpoch       int64
+	LeaseExpiresAt   *time.Time
+	CorrelationID    string
+	CommitSHA        *string
+	StartedAt        *time.Time
+	FinishedAt       *time.Time
 }
 
 // TransitionCommand is one caller's transition request.
@@ -149,6 +150,8 @@ type RegistryStore interface {
 
 // RunView is a read model of a task_runs row for the HTTP API.
 type RunView struct {
+	Requirement    json.RawMessage
+	Baseline       json.RawMessage
 	RunID          string
 	TaskID         string
 	State          domain.State

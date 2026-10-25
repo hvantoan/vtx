@@ -67,6 +67,7 @@ const (
 // Validation errors. Their HTTP statuses are fixed by spec §0.D; the transport
 // layer maps them by identity, so the codes must stay stable.
 var (
+	ErrEvidenceInvalid   = errors.New("registry: evidence invalid")
 	ErrNotFound          = errors.New("registry: run not found")
 	ErrStaleVersion      = errors.New("registry: stale version")
 	ErrStaleLease        = errors.New("registry: stale lease")
@@ -89,7 +90,7 @@ func HTTPStatusForError(err error) int {
 		return 404
 	case errors.Is(err, ErrStaleVersion), errors.Is(err, ErrStaleLease),
 		errors.Is(err, ErrAlreadyTerminal), errors.Is(err, ErrInvalidTransition),
-		errors.Is(err, ErrConflictActiveRun), errors.Is(err, ErrStageNotOperational):
+		errors.Is(err, ErrConflictActiveRun), errors.Is(err, ErrStageNotOperational), errors.Is(err, ErrEvidenceInvalid):
 		return 409
 	case errors.Is(err, ErrForbidden):
 		return 403
@@ -175,7 +176,7 @@ func transitionTable() map[transitionKey]transition {
 			key:         transitionKey{from, ActionAdvance},
 			to:          stageAdvance[i+1],
 			actors:      []Actor{ActorOrchestrator},
-			operational: false,
+			operational: from == StatePreparing,
 		})
 	}
 
@@ -208,6 +209,7 @@ var transitionByKey = transitionTable()
 
 // Request is the loaded run state plus the caller's expectation.
 type Request struct {
+	PreparationReady   bool
 	State              State
 	Version            int64
 	ExpectedVersion    int64
@@ -298,6 +300,10 @@ func Evaluate(req Request, now time.Time) (Decision, error) {
 
 	if !row.operational {
 		return Decision{}, fmt.Errorf("%w: %s --%s-->", ErrStageNotOperational, req.State, req.Action)
+	}
+
+	if req.State == StatePreparing && req.Action == ActionAdvance && !req.PreparationReady {
+		return Decision{}, ErrEvidenceInvalid
 	}
 
 	to := row.to

@@ -61,6 +61,7 @@ func (s *RegistryService) TransitionRun(ctx context.Context, cmd TransitionComma
 	run, err := s.store.TransitionRun(ctx, cmd, func(locked RunSnapshot) (TransitionPlan, error) {
 		decision, err := domain.Evaluate(domain.Request{
 			State:              locked.State,
+			PreparationReady:   locked.PreparationReady,
 			Version:            locked.Version,
 			ExpectedVersion:    cmd.ExpectedVersion,
 			LeaseOwner:         locked.LeaseOwner,
