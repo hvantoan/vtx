@@ -1,0 +1,22 @@
+🧪 Running Go integration tests against real Postgres...
+?   	github.com/vtx/platform/cmd/api	[no test files]
+?   	github.com/vtx/platform/cmd/cli	[no test files]
+?   	github.com/vtx/platform/cmd/worker	[no test files]
+ok  	github.com/vtx/platform/internal/agent	(cached)
+ok  	github.com/vtx/platform/internal/application	(cached)
+ok  	github.com/vtx/platform/internal/config	(cached)
+ok  	github.com/vtx/platform/internal/domain	(cached)
+ok  	github.com/vtx/platform/internal/execcmd	(cached)
+ok  	github.com/vtx/platform/internal/gate	(cached)
+ok  	github.com/vtx/platform/internal/gitops	(cached)
+ok  	github.com/vtx/platform/internal/integrations/github	(cached)
+?   	github.com/vtx/platform/internal/integrations/jira	[no test files]
+?   	github.com/vtx/platform/internal/observability	[no test files]
+ok  	github.com/vtx/platform/internal/orchestration	(cached)
+ok  	github.com/vtx/platform/internal/persistence	(cached)
+ok  	github.com/vtx/platform/internal/persistence/db	(cached)
+ok  	github.com/vtx/platform/internal/qa	(cached)
+ok  	github.com/vtx/platform/internal/requirement	(cached)
+ok  	github.com/vtx/platform/internal/retry	(cached)
+ok  	github.com/vtx/platform/internal/scheduler	(cached)
+ok  	github.com/vtx/platform/internal/transport/http	(cached)
