@@ -159,8 +159,9 @@ type transitionKey struct {
 	action Action
 }
 
-// stageAdvance is the linear preparation chain. Every hop is contract-only in
-// Phase 1: no downstream system exists to produce the evidence it claims.
+// stageAdvance is the linear pipeline chain. Every hop is operational now
+// that VTX-5..12 are merged; evidence enforcement lives in the transition
+// guards (coding/verifying/qa/quality_gate) and the preparing readiness gate.
 var stageAdvance = []State{
 	StatePreparing, StateCoding, StateVerifying, StateQA, StateQualityGate, StatePRDraft,
 }
@@ -168,7 +169,7 @@ var stageAdvance = []State{
 func transitionTable() map[transitionKey]transition {
 	rows := []transition{
 		{key: transitionKey{StateQueued, ActionBegin}, to: StatePreparing, actors: []Actor{ActorScheduler}, operational: true},
-		{key: transitionKey{StatePRDraft, ActionComplete}, to: StateCompleted, actors: []Actor{ActorOrchestrator}, operational: false},
+		{key: transitionKey{StatePRDraft, ActionComplete}, to: StateCompleted, actors: []Actor{ActorOrchestrator}, operational: true},
 	}
 	for i, from := range stageAdvance {
 		if i+1 >= len(stageAdvance) {
@@ -178,7 +179,7 @@ func transitionTable() map[transitionKey]transition {
 			key:         transitionKey{from, ActionAdvance},
 			to:          stageAdvance[i+1],
 			actors:      []Actor{ActorOrchestrator},
-			operational: from == StatePreparing,
+			operational: true,
 		})
 	}
 

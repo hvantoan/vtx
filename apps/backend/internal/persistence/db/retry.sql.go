@@ -110,7 +110,7 @@ func (q *Queries) InsertDeliveryRedrive(ctx context.Context, arg InsertDeliveryR
 }
 
 const listExpiredLeaseRunsForRecovery = `-- name: ListExpiredLeaseRunsForRecovery :many
-SELECT run_id, task_id, intent_id, correlation_id, origin_event_id, changelog_id, state, version, attempt, resume_state, retry_due_at, commit_sha, branch, error_code, error_message, lease_owner, lease_epoch, lease_expires_at, created_at, updated_at, started_at, finished_at, failure_class, retry_policy_version
+SELECT run_id, task_id, intent_id, correlation_id, origin_event_id, changelog_id, state, version, attempt, resume_state, retry_due_at, commit_sha, branch, error_code, error_message, lease_owner, lease_epoch, lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 FROM task_runs
 WHERE state NOT IN ('completed', 'failed', 'cancelled', 'queued', 'blocked', 'retry_wait')
   AND lease_expires_at IS NOT NULL
@@ -159,6 +159,7 @@ func (q *Queries) ListExpiredLeaseRunsForRecovery(ctx context.Context, arg ListE
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.PrUrl,
 			&i.FailureClass,
 			&i.RetryPolicyVersion,
 		); err != nil {
@@ -174,7 +175,7 @@ func (q *Queries) ListExpiredLeaseRunsForRecovery(ctx context.Context, arg ListE
 
 const listRetryWaitRunsDue = `-- name: ListRetryWaitRunsDue :many
 
-SELECT run_id, task_id, intent_id, correlation_id, origin_event_id, changelog_id, state, version, attempt, resume_state, retry_due_at, commit_sha, branch, error_code, error_message, lease_owner, lease_epoch, lease_expires_at, created_at, updated_at, started_at, finished_at, failure_class, retry_policy_version
+SELECT run_id, task_id, intent_id, correlation_id, origin_event_id, changelog_id, state, version, attempt, resume_state, retry_due_at, commit_sha, branch, error_code, error_message, lease_owner, lease_epoch, lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 FROM task_runs
 WHERE state = 'retry_wait'
   AND retry_due_at IS NOT NULL
@@ -223,6 +224,7 @@ func (q *Queries) ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRun
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.PrUrl,
 			&i.FailureClass,
 			&i.RetryPolicyVersion,
 		); err != nil {

@@ -61,7 +61,7 @@ func (q *Queries) FinishRunBaseline(ctx context.Context, arg FinishRunBaselinePa
 }
 
 const getRequirementInput = `-- name: GetRequirementInput :one
-SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.failure_class, r.retry_policy_version, t.jira_site_id, t.jira_issue_id, t.jira_issue_key, t.project_key
+SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.pr_url, r.failure_class, r.retry_policy_version, t.jira_site_id, t.jira_issue_id, t.jira_issue_key, t.project_key
 FROM task_runs r JOIN registry_tasks t ON t.id = r.task_id WHERE r.run_id = $1
 `
 
@@ -88,6 +88,7 @@ type GetRequirementInputRow struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	StartedAt          pgtype.Timestamptz `json:"started_at"`
 	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	PrUrl              pgtype.Text        `json:"pr_url"`
 	FailureClass       pgtype.Text        `json:"failure_class"`
 	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
 	JiraSiteID         string             `json:"jira_site_id"`
@@ -122,6 +123,7 @@ func (q *Queries) GetRequirementInput(ctx context.Context, runID pgtype.UUID) (G
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.PrUrl,
 		&i.FailureClass,
 		&i.RetryPolicyVersion,
 		&i.JiraSiteID,

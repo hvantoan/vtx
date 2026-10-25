@@ -115,6 +115,21 @@ type JiraWebhookInbox struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type OperatorAuditLog struct {
+	AuditID       pgtype.UUID        `json:"audit_id"`
+	Actor         string             `json:"actor"`
+	OperatorID    pgtype.Text        `json:"operator_id"`
+	Action        string             `json:"action"`
+	TargetType    string             `json:"target_type"`
+	TargetID      string             `json:"target_id"`
+	Reason        pgtype.Text        `json:"reason"`
+	CorrelationID pgtype.Text        `json:"correlation_id"`
+	RequestID     pgtype.Text        `json:"request_id"`
+	Outcome       string             `json:"outcome"`
+	Detail        []byte             `json:"detail"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type OutboxEvent struct {
 	OutboxID         pgtype.UUID        `json:"outbox_id"`
 	IntentID         pgtype.UUID        `json:"intent_id"`
@@ -128,6 +143,30 @@ type OutboxEvent struct {
 	NextAttemptAt    pgtype.Timestamptz `json:"next_attempt_at"`
 	DeadLetteredAt   pgtype.Timestamptz `json:"dead_lettered_at"`
 	DeadLetterReason pgtype.Text        `json:"dead_letter_reason"`
+	RedriveCount     int32              `json:"redrive_count"`
+}
+
+type PullRequest struct {
+	PrID         pgtype.UUID        `json:"pr_id"`
+	RunID        pgtype.UUID        `json:"run_id"`
+	RepoOwner    string             `json:"repo_owner"`
+	RepoName     string             `json:"repo_name"`
+	PrNumber     pgtype.Int4        `json:"pr_number"`
+	PrUrl        pgtype.Text        `json:"pr_url"`
+	Draft        bool               `json:"draft"`
+	HeadBranch   string             `json:"head_branch"`
+	HeadSha      string             `json:"head_sha"`
+	BaseBranch   string             `json:"base_branch"`
+	Status       string             `json:"status"`
+	GithubPrID   pgtype.Int8        `json:"github_pr_id"`
+	CiStatus     pgtype.Text        `json:"ci_status"`
+	LastSyncedAt pgtype.Timestamptz `json:"last_synced_at"`
+	OpenedAt     pgtype.Timestamptz `json:"opened_at"`
+	ClosedAt     pgtype.Timestamptz `json:"closed_at"`
+	ErrorCode    pgtype.Text        `json:"error_code"`
+	ErrorDetail  pgtype.Text        `json:"error_detail"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type QaVerdict struct {
@@ -220,6 +259,7 @@ type TaskRun struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	StartedAt          pgtype.Timestamptz `json:"started_at"`
 	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	PrUrl              pgtype.Text        `json:"pr_url"`
 	FailureClass       pgtype.Text        `json:"failure_class"`
 	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
 }

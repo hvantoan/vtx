@@ -95,8 +95,6 @@ func TestNonOperationalHopsAreClosed(t *testing.T) {
 		withState(held, StateCoding, ActionAdvance, ActorOrchestrator),
 		withState(held, StateVerifying, ActionAdvance, ActorOrchestrator),
 		withState(held, StateQA, ActionAdvance, ActorOrchestrator),
-		withState(held, StateQualityGate, ActionAdvance, ActorOrchestrator),
-		withState(held, StatePRDraft, ActionComplete, ActorOrchestrator),
 	}
 	for _, req := range closed {
 		_, err := Evaluate(req, now)

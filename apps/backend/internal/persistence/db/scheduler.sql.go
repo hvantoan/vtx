@@ -67,7 +67,7 @@ func (q *Queries) GetDeferredIntentOrigin(ctx context.Context, intentID pgtype.U
 }
 
 const listDueRetryRuns = `-- name: ListDueRetryRuns :many
-SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.failure_class, r.retry_policy_version FROM task_runs r
+SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.pr_url, r.failure_class, r.retry_policy_version FROM task_runs r
 WHERE state = 'retry_wait' AND retry_due_at <= CURRENT_TIMESTAMP
 ORDER BY retry_due_at, run_id LIMIT $1 FOR UPDATE SKIP LOCKED
 `
@@ -104,6 +104,7 @@ func (q *Queries) ListDueRetryRuns(ctx context.Context, limit int32) ([]TaskRun,
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.PrUrl,
 			&i.FailureClass,
 			&i.RetryPolicyVersion,
 		); err != nil {
@@ -118,7 +119,7 @@ func (q *Queries) ListDueRetryRuns(ctx context.Context, limit int32) ([]TaskRun,
 }
 
 const listExpiredLeaseRuns = `-- name: ListExpiredLeaseRuns :many
-SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.failure_class, r.retry_policy_version FROM task_runs r
+SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.pr_url, r.failure_class, r.retry_policy_version FROM task_runs r
 WHERE state NOT IN ('completed','failed','cancelled')
 AND lease_expires_at < CURRENT_TIMESTAMP
 ORDER BY lease_expires_at, run_id LIMIT $1 FOR UPDATE SKIP LOCKED
@@ -156,6 +157,7 @@ func (q *Queries) ListExpiredLeaseRuns(ctx context.Context, limit int32) ([]Task
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.PrUrl,
 			&i.FailureClass,
 			&i.RetryPolicyVersion,
 		); err != nil {
@@ -207,7 +209,7 @@ func (q *Queries) ListPromotableTasks(ctx context.Context, limit int32) ([]Regis
 }
 
 const listQueuedRunsForAdmission = `-- name: ListQueuedRunsForAdmission :many
-SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.failure_class, r.retry_policy_version FROM task_runs r WHERE state = 'queued'
+SELECT r.run_id, r.task_id, r.intent_id, r.correlation_id, r.origin_event_id, r.changelog_id, r.state, r.version, r.attempt, r.resume_state, r.retry_due_at, r.commit_sha, r.branch, r.error_code, r.error_message, r.lease_owner, r.lease_epoch, r.lease_expires_at, r.created_at, r.updated_at, r.started_at, r.finished_at, r.pr_url, r.failure_class, r.retry_policy_version FROM task_runs r WHERE state = 'queued'
 ORDER BY created_at, run_id LIMIT $1 FOR UPDATE SKIP LOCKED
 `
 
@@ -243,6 +245,7 @@ func (q *Queries) ListQueuedRunsForAdmission(ctx context.Context, limit int32) (
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.PrUrl,
 			&i.FailureClass,
 			&i.RetryPolicyVersion,
 		); err != nil {

@@ -54,8 +54,7 @@ INSERT INTO task_runs (
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version;
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version;
 
 -- name: HasActiveRunForTask :one
 -- I-03 read side: the partial unique index is the enforcement, this is the
@@ -70,8 +69,7 @@ SELECT EXISTS (
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 LIMIT 1;
@@ -83,8 +81,7 @@ LIMIT 1;
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 FOR UPDATE;
@@ -111,8 +108,7 @@ WHERE run_id = $1 AND version = $10
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version;
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version;
 
 -- name: InsertTaskRunEvent :one
 -- I-05: the creation row is version 0 with previous_state = '' (a run is born,

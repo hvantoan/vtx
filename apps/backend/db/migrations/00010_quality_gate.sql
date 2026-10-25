@@ -1,6 +1,6 @@
 -- +goose Up
 -- +goose StatementBegin
--- VTX-10: deterministic gate decision records.
+-- 00010_quality_gate.sql — deterministic gate decision records.
 
 -- Append-only audit of every gate evaluation. "Effective decision" for a SHA =
 -- latest evaluated_at among rows for (run_id, commit_sha). Multiple rows for
@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS gate_decisions (
     -- run row locked FOR UPDATE at evaluation time.
     subject_commit_sha TEXT NOT NULL,
     -- The SHA independently re-resolved from the worktree HEAD at evaluation
-    -- time. Divergence from subject_commit_sha is itself a FAIL condition
-    -- (sha_binding), but both are stored for audit.
+    -- time (WorktreeReader.HeadSHA). Divergence from subject_commit_sha is
+    -- itself a FAIL condition (C2), but both are stored for audit.
     verified_head_sha TEXT,
     policy_name TEXT NOT NULL,        -- e.g. 'vtx-gate-policy'
     policy_version TEXT NOT NULL,     -- e.g. 'v1' — config snapshot, not a FK
@@ -37,5 +37,6 @@ CREATE INDEX IF NOT EXISTS idx_gate_decisions_run_sha
 
 -- +goose Down
 -- +goose StatementBegin
+DROP INDEX IF EXISTS idx_gate_decisions_run_sha;
 DROP TABLE IF EXISTS gate_decisions;
 -- +goose StatementEnd

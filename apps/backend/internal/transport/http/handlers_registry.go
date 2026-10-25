@@ -94,6 +94,21 @@ func (s *Server) HandleRegistryTransition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	metadata := req.Metadata
+	if actor == domain.ActorOperator {
+		values := make(map[string]any)
+		if len(metadata) != 0 && string(metadata) != "null" {
+			if err := json.Unmarshal(metadata, &values); err != nil {
+				writeRegistryError(w, http.StatusBadRequest, "invalid_request", "metadata must be a JSON object")
+				return
+			}
+		}
+		if id := operatorID(r); id != "" {
+			values["operator_id"] = id
+		}
+		metadata, _ = json.Marshal(values)
+	}
+
 	run, err := s.registryTransitions.TransitionRun(r.Context(), application.TransitionCommand{
 		RunID:              runID,
 		ExpectedVersion:    req.ExpectedVersion,
@@ -102,7 +117,7 @@ func (s *Server) HandleRegistryTransition(w http.ResponseWriter, r *http.Request
 		Actor:              actor,
 		ActorType:          actorTypeFor(actor),
 		Reason:             req.Reason,
-		Metadata:           req.Metadata,
+		Metadata:           metadata,
 	})
 	if err != nil {
 		s.writeRegistryServiceError(w, err)

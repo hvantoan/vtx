@@ -55,8 +55,7 @@ const getTaskRun = `-- name: GetTaskRun :one
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 LIMIT 1
@@ -88,6 +87,7 @@ func (q *Queries) GetTaskRun(ctx context.Context, runID pgtype.UUID) (TaskRun, e
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.PrUrl,
 		&i.FailureClass,
 		&i.RetryPolicyVersion,
 	)
@@ -98,8 +98,7 @@ const getTaskRunForUpdate = `-- name: GetTaskRunForUpdate :one
 SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 FROM task_runs
 WHERE run_id = $1
 FOR UPDATE
@@ -134,6 +133,7 @@ func (q *Queries) GetTaskRunForUpdate(ctx context.Context, runID pgtype.UUID) (T
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.PrUrl,
 		&i.FailureClass,
 		&i.RetryPolicyVersion,
 	)
@@ -249,8 +249,7 @@ INSERT INTO task_runs (
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 `
 
 type InsertTaskRunParams struct {
@@ -294,6 +293,7 @@ func (q *Queries) InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) (T
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.PrUrl,
 		&i.FailureClass,
 		&i.RetryPolicyVersion,
 	)
@@ -482,8 +482,7 @@ WHERE run_id = $1 AND version = $10
 RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     changelog_id, state, version, attempt, resume_state, retry_due_at,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, created_at, updated_at, started_at, finished_at,
-    failure_class, retry_policy_version
+    lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version
 `
 
 type UpdateTaskRunStateParams struct {
@@ -542,6 +541,7 @@ func (q *Queries) UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunState
 		&i.UpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.PrUrl,
 		&i.FailureClass,
 		&i.RetryPolicyVersion,
 	)

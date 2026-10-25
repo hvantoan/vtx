@@ -31,6 +31,8 @@ type Querier interface {
 	// Called only AFTER locking the run and verifying expected_version.
 	// Epoch increment fences the dead worker in the same recovery transaction.
 	ClearExpiredRunLeaseForRetryRecovery(ctx context.Context, runID pgtype.UUID) (int64, error)
+	CountActiveRuns(ctx context.Context) (int64, error)
+	CountDeferredIntents(ctx context.Context) (int64, error)
 	CountLiveAdmissionSlots(ctx context.Context) (int64, error)
 	// Lag of the consumer that reads `event_type` — count + age of the oldest
 	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
@@ -50,8 +52,13 @@ type Querier interface {
 	FinishVerificationRun(ctx context.Context, arg FinishVerificationRunParams) (VerificationRun, error)
 	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
 	GetDeferredIntentOrigin(ctx context.Context, intentID pgtype.UUID) (GetDeferredIntentOriginRow, error)
+	GetGateVerdict(ctx context.Context, arg GetGateVerdictParams) (GetGateVerdictRow, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
+	GetOperatorRunDetail(ctx context.Context, runID pgtype.UUID) (GetOperatorRunDetailRow, error)
 	GetOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (GetOutboxEventRow, error)
+	GetPRRunContext(ctx context.Context, runID pgtype.UUID) (GetPRRunContextRow, error)
+	GetPullRequestByNumber(ctx context.Context, arg GetPullRequestByNumberParams) (PullRequest, error)
+	GetPullRequestByRun(ctx context.Context, runID pgtype.UUID) (PullRequest, error)
 	GetQASessionArtifact(ctx context.Context, arg GetQASessionArtifactParams) (EvidenceArtifact, error)
 	GetQAVerdict(ctx context.Context, arg GetQAVerdictParams) (QaVerdict, error)
 	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
@@ -102,7 +109,11 @@ type Querier interface {
 	// Returns the inserted row; ON CONFLICT DO NOTHING yields an empty result on
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
+	InsertOperatorAudit(ctx context.Context, arg InsertOperatorAuditParams) (pgtype.UUID, error)
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error)
+	// VTX-12 draft pull-request persistence.
+	InsertPullRequest(ctx context.Context, arg InsertPullRequestParams) (PullRequest, error)
+	InsertPullRequestOpenedEvent(ctx context.Context, arg InsertPullRequestOpenedEventParams) error
 	// UNIQUE(run_id, attempt) is the one-verdict-per-attempt guard; a second
 	// submitter hits 23505 which the caller maps to ErrQAVerdictConflict (409).
 	InsertQAVerdict(ctx context.Context, arg InsertQAVerdictParams) (QaVerdict, error)
@@ -135,6 +146,7 @@ type Querier interface {
 	// Reconcile read: every allocated row joined to its run so the caller can see
 	// terminal runs and expired leases without a second query.
 	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
+	ListDeadLettered(ctx context.Context, arg ListDeadLetteredParams) ([]ListDeadLetteredRow, error)
 	// FIFO order is the contract for the admission path (VTX-5).
 	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
 	ListDueRetryRuns(ctx context.Context, limit int32) ([]TaskRun, error)
@@ -148,12 +160,15 @@ type Querier interface {
 	ListGateDecisions(ctx context.Context, runID pgtype.UUID) ([]GateDecision, error)
 	ListPreparingRuns(ctx context.Context, limit int32) ([]pgtype.UUID, error)
 	ListPromotableTasks(ctx context.Context, limit int32) ([]RegistryTask, error)
+	ListPullRequestsByStatus(ctx context.Context, arg ListPullRequestsByStatusParams) ([]PullRequest, error)
 	ListQAVerdictEvidenceIDs(ctx context.Context, verdictID pgtype.UUID) ([]pgtype.UUID, error)
 	ListQueuedRunsForAdmission(ctx context.Context, limit int32) ([]TaskRun, error)
 	// VTX-11 retry/DLQ queries. Sweep reads select by predicate; the CAS on
 	// task_runs.version (UpdateTaskRunState) is what makes a two-replica sweep a
 	// no-op for the loser — no claim column needed.
 	ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]TaskRun, error)
+	ListRunsFiltered(ctx context.Context, arg ListRunsFilteredParams) ([]ListRunsFilteredRow, error)
+	ListSSEEventsAfter(ctx context.Context, arg ListSSEEventsAfterParams) ([]ListSSEEventsAfterRow, error)
 	// Crash reconcile sweep: rows stuck 'running' whose starter is presumed dead.
 	ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]VerificationRun, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
@@ -162,6 +177,7 @@ type Querier interface {
 	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
 	ListVerificationRuns(ctx context.Context, runID pgtype.UUID) ([]VerificationRun, error)
+	ListWorkerHeartbeats(ctx context.Context) ([]WorkerHeartbeat, error)
 	LockAdmissionLedger(ctx context.Context) error
 	// Serialize deliveries that refer to the same intent, even when they carry
 	// different source event IDs. The intent row is created before its outbox
@@ -171,6 +187,7 @@ type Querier interface {
 	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
 	// second ACK for the same event reports 0 rows.
 	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)
+	MarkPullRequestStatus(ctx context.Context, arg MarkPullRequestStatusParams) (PullRequest, error)
 	// The ONLY mutation of terminal rows: SHA drift marking (FR-QA-003). Rows
 	// bound to a SHA that is not the current one stop counting as evidence.
 	MarkVerificationSuperseded(ctx context.Context, arg MarkVerificationSupersededParams) (int64, error)
@@ -179,9 +196,11 @@ type Querier interface {
 	MarkWorktreeStatus(ctx context.Context, arg MarkWorktreeStatusParams) (Worktree, error)
 	// D8-7: next attempt is computed, not stored on task_runs.
 	MaxVerificationAttempt(ctx context.Context, runID pgtype.UUID) (int32, error)
+	OutboxStatsByType(ctx context.Context) ([]OutboxStatsByTypeRow, error)
 	// Dead letter: unsupported event_type, schema-invalid payload or exhausted
 	// retries. The row is kept (audit) and excluded from claim until redrive.
 	QuarantineOutboxEvent(ctx context.Context, arg QuarantineOutboxEventParams) (int64, error)
+	RedriveDeadLetter(ctx context.Context, outboxID pgtype.UUID) (int64, error)
 	// Audited redrive step 1: clear the DLQ marker so the dispatcher re-claims
 	// the event. Guarded on dead_lettered_at — a second redrive is a 0-row no-op.
 	RedriveDeadLetteredEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
@@ -194,6 +213,8 @@ type Querier interface {
 	// while the run is live — a terminal run's lease must never be extended.
 	// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
 	RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error)
+	// VTX-13 operator dashboard reads and audited DLQ mutation.
+	RunStateHistogram(ctx context.Context) ([]RunStateHistogramRow, error)
 	// Bounded retry: bump attempt, back off, release the claim so a sibling
 	// replica can pick the event up again.
 	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) (int64, error)
@@ -203,9 +224,11 @@ type Querier interface {
 	// The allocated branch is persisted on the VTX-3 run row — VTX-4 does not
 	// duplicate it into a new run-level column.
 	SetRunBranch(ctx context.Context, arg SetRunBranchParams) error
+	SetRunPrURL(ctx context.Context, arg SetRunPrURLParams) error
 	SetSchedulerRunError(ctx context.Context, arg SetSchedulerRunErrorParams) error
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.
 	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
+	UpdatePullRequestSync(ctx context.Context, arg UpdatePullRequestSyncParams) (PullRequest, error)
 	// CAS on version. Called only after GetTaskRunForUpdate; `WHERE version = $10`
 	// is the second line of defence (0 rows ⇒ caller treats it as stale_version).
 	UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunStateParams) (TaskRun, error)
@@ -220,6 +243,7 @@ type Querier interface {
 	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error)
 	UpsertRunRequirement(ctx context.Context, arg UpsertRunRequirementParams) (RunRequirement, error)
 	UpsertWorkerHeartbeat(ctx context.Context, arg UpsertWorkerHeartbeatParams) (string, error)
+	UpsertWorkerHeartbeatOp(ctx context.Context, arg UpsertWorkerHeartbeatOpParams) error
 }
 
 var _ Querier = (*Queries)(nil)
