@@ -59,7 +59,11 @@ func (s *RegistryService) TransitionRun(ctx context.Context, cmd TransitionComma
 	now := s.clock.Now()
 
 	run, err := s.store.TransitionRun(ctx, cmd, func(locked RunSnapshot) (TransitionPlan, error) {
-		decision, err := domain.Evaluate(domain.Request{
+		evaluate := domain.Evaluate
+		if guarded, ok := s.store.(GuardedRegistryStore); ok && guarded.HasTransitionGuard(locked.State, cmd.Action) {
+			evaluate = domain.EvaluateWithGuard
+		}
+		decision, err := evaluate(domain.Request{
 			State:              locked.State,
 			Version:            locked.Version,
 			ExpectedVersion:    cmd.ExpectedVersion,

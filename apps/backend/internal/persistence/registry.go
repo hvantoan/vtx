@@ -26,6 +26,7 @@ type txBeginner interface {
 type PgRegistryStore struct {
 	pool    txBeginner
 	queries *db.Queries
+	guards  map[TransitionKey]TransitionGuard
 }
 
 func NewPgRegistryStore(pool txBeginner, queries *db.Queries) *PgRegistryStore {
@@ -66,6 +67,12 @@ func (s *PgRegistryStore) TransitionRun(
 	plan, err := decide(snapshotFromTaskRun(locked))
 	if err != nil {
 		return application.RunSnapshot{}, err
+	}
+
+	if guard := s.guards[TransitionKey{domain.State(locked.State), cmd.Action}]; guard != nil {
+		if err := guard.Check(ctx, qtx, locked, cmd, &plan); err != nil {
+			return application.RunSnapshot{}, err
+		}
 	}
 
 	updated, err := qtx.UpdateTaskRunState(ctx, db.UpdateTaskRunStateParams{

@@ -275,3 +275,9 @@ func ParseIntentEvent(payload []byte) (IntentEvent, error) {
 		OccurredAt:     occurredAt.UTC(),
 	}, nil
 }
+
+// GuardedRegistryStore advertises only hops enforced inside its write tx.
+// The registry uses EvaluateWithGuard for these; a plain store stays closed.
+type GuardedRegistryStore interface {
+	HasTransitionGuard(domain.State, domain.Action) bool
+}
