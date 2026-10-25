@@ -64,6 +64,24 @@ func (s *PgRegistryStore) TransitionRun(
 		return application.RunSnapshot{}, fmt.Errorf("lock run: %w", err)
 	}
 
+	if cmd.RecoverExpiredLease {
+		if cmd.Actor != domain.ActorPolicy || cmd.ActorType != domain.ActorTypeSystem {
+			return application.RunSnapshot{}, domain.ErrForbidden
+		}
+		if locked.Version != cmd.ExpectedVersion {
+			return application.RunSnapshot{}, domain.ErrStaleVersion
+		}
+		n, err := qtx.ClearExpiredRunLeaseForRetryRecovery(ctx, locked.RunID)
+		if err != nil {
+			return application.RunSnapshot{}, err
+		}
+		if n != 1 {
+			return application.RunSnapshot{}, domain.ErrStaleLease
+		}
+		locked.LeaseOwner = pgtype.Text{}
+		locked.LeaseExpiresAt = pgtype.Timestamptz{}
+		locked.LeaseEpoch++
+	}
 	plan, err := decide(snapshotFromTaskRun(locked))
 	if err != nil {
 		return application.RunSnapshot{}, err
@@ -76,16 +94,18 @@ func (s *PgRegistryStore) TransitionRun(
 	}
 
 	updated, err := qtx.UpdateTaskRunState(ctx, db.UpdateTaskRunStateParams{
-		RunID:        locked.RunID,
-		State:        string(plan.Update.State),
-		ResumeState:  textFromState(plan.Update.ResumeState),
-		RetryDueAt:   timestamptzFrom(plan.Update.RetryDueAt),
-		Attempt:      plan.Update.Attempt,
-		ErrorCode:    textFrom(plan.Update.ErrorCode),
-		ErrorMessage: textFrom(plan.Update.ErrorMessage),
-		StartedAt:    timestamptzFrom(plan.Update.StartedAt),
-		FinishedAt:   timestamptzFrom(plan.Update.FinishedAt),
-		Version:      locked.Version,
+		RunID:              locked.RunID,
+		State:              string(plan.Update.State),
+		ResumeState:        textFromState(plan.Update.ResumeState),
+		RetryDueAt:         timestamptzFrom(plan.Update.RetryDueAt),
+		Attempt:            plan.Update.Attempt,
+		ErrorCode:          textFrom(plan.Update.ErrorCode),
+		ErrorMessage:       textFrom(plan.Update.ErrorMessage),
+		StartedAt:          timestamptzFrom(plan.Update.StartedAt),
+		FinishedAt:         timestamptzFrom(plan.Update.FinishedAt),
+		FailureClass:       textFrom(plan.Update.FailureClass),
+		RetryPolicyVersion: textFrom(plan.Update.RetryPolicyVersion),
+		Version:            locked.Version,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Unreachable while the row stays locked; reported as the domain error
@@ -308,14 +328,16 @@ func isForeignKeyViolation(err error) bool {
 
 func snapshotFromTaskRun(row db.TaskRun) application.RunSnapshot {
 	snapshot := application.RunSnapshot{
-		RunID:         uuidToString(row.RunID),
-		TaskID:        uuidToString(row.TaskID),
-		IntentID:      uuidToString(row.IntentID),
-		State:         domain.State(row.State),
-		Version:       row.Version,
-		Attempt:       row.Attempt,
-		LeaseEpoch:    row.LeaseEpoch,
-		CorrelationID: textToString(row.CorrelationID),
+		RunID:              uuidToString(row.RunID),
+		TaskID:             uuidToString(row.TaskID),
+		IntentID:           uuidToString(row.IntentID),
+		State:              domain.State(row.State),
+		Version:            row.Version,
+		Attempt:            row.Attempt,
+		LeaseEpoch:         row.LeaseEpoch,
+		CorrelationID:      textToString(row.CorrelationID),
+		FailureClass:       row.FailureClass.String,
+		RetryPolicyVersion: row.RetryPolicyVersion.String,
 	}
 	if state := domain.State(textToString(row.ResumeState)); state.Valid() {
 		snapshot.ResumeState = &state

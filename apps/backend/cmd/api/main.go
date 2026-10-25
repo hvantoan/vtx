@@ -18,6 +18,8 @@ import (
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
 	"github.com/vtx/platform/internal/persistence"
+	"github.com/vtx/platform/internal/qa"
+	"github.com/vtx/platform/internal/retry"
 	transporthttp "github.com/vtx/platform/internal/transport/http"
 )
 
@@ -132,9 +134,18 @@ func main() {
 			os.Exit(1)
 		}
 		registryStore := persistence.NewPgRegistryStore(db.Pool, db.Queries)
+		qualityGit := gitops.Runner{Git: gitops.Git{}, Layout: gitops.Layout{WorktreeRoot: cfg.WorktreeRoot}}
+		guards := persistence.EvidenceGuards{Head: qualityGit, WorktreeRoot: cfg.WorktreeRoot}
+		if err := registryStore.WithTransitionGuards(guards.GuardMap()); err != nil {
+			logger.Error("Invalid quality guards", "error", err)
+			os.Exit(1)
+		}
+		// QA runner is supplied by the VTX-7 runtime adapter. Until present,
+		// LaunchSession explicitly fails closed; no synthetic verdict exists.
+		server.WithQuality(&qa.Service{Store: persistence.NewPgQAStore(db.Pool, db.Queries), Git: qualityGit, Layout: gitops.Layout{WorktreeRoot: cfg.WorktreeRoot}}, persistence.NewPgGateService(db.Pool, db.Queries, guards), persistence.NewPgRetryStore(db.Pool, db.Queries), os.Getenv("QA_AGENT_AUTH_TOKEN"))
 		server.WithRegistry(
 			registryStore,
-			application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger),
+			application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger).WithRetryPlanner(retry.DefaultPolicy()),
 		)
 		// VTX-4 worktree surface. The API process owns HTTP reads/writes only;
 		// the periodic reconcile lives in the Temporal worker.

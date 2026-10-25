@@ -181,7 +181,7 @@ func (s *PgQAStore) SubmitVerdictTx(ctx context.Context, c qa.SubmitCommand, now
 		return record, err
 	}
 	record.EvidenceIDs = c.EvidenceIDs
-	if err = insertEvidenceEvent(ctx, q, run, "qa.verdict_recorded.v1", map[string]any{"verdict_id": record.ID, "attempt": record.Attempt, "commit_sha": record.CommitSHA, "verdict": record.Verdict, "qa_session_id": record.QASessionID, "qa_agent_identity": record.QAIdentity, "coding_session_id": record.CodingSessionID, "evidence_ids": record.EvidenceIDs, "findings": record.Findings}, now); err != nil {
+	if err = insertEvidenceEvent(ctx, q, run, "qa.verdict_recorded.v1", map[string]any{"verdict_id": record.ID, "attempt": record.Attempt, "commit_sha": record.CommitSHA, "verdict": record.Verdict, "qa_session_id": record.QASessionID, "qa_agent_identity": record.QAIdentity, "coding_session_id": record.CodingSessionID, "evidence_ids": record.EvidenceIDs, "findings": record.Findings, "evaluated_at": record.EvaluatedAt.Format(time.RFC3339Nano)}, now); err != nil {
 		return record, err
 	}
 	if err = tx.Commit(ctx); err != nil {

@@ -37,6 +37,10 @@ type Server struct {
 	registryTransitions RegistryTransitioner
 	// VTX-4 worktree surface. Nil until WithWorktree is called.
 	worktree WorktreeService
+	qa       QAService
+	gate     GateService
+	redriver DeliveryRedriver
+	qaToken  string
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {

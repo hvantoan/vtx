@@ -11,6 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearExpiredRunLeaseForRetryRecovery = `-- name: ClearExpiredRunLeaseForRetryRecovery :execrows
+UPDATE task_runs SET lease_owner = NULL, lease_expires_at = NULL,
+    lease_epoch = lease_epoch + 1
+WHERE run_id = $1 AND lease_owner IS NOT NULL
+    AND lease_expires_at < CURRENT_TIMESTAMP
+    AND state NOT IN ('completed','failed','cancelled','blocked','retry_wait','queued')
+`
+
+// Called only AFTER locking the run and verifying expected_version.
+// Epoch increment fences the dead worker in the same recovery transaction.
+func (q *Queries) ClearExpiredRunLeaseForRetryRecovery(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, clearExpiredRunLeaseForRetryRecovery, runID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getOutboxEvent = `-- name: GetOutboxEvent :one
 SELECT outbox_id, intent_id, event_type, payload, attempt,
     published_at, dead_lettered_at, dead_letter_reason, created_at
@@ -92,13 +110,9 @@ func (q *Queries) InsertDeliveryRedrive(ctx context.Context, arg InsertDeliveryR
 }
 
 const listExpiredLeaseRuns = `-- name: ListExpiredLeaseRuns :many
-SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
-    changelog_id, state, version, attempt, resume_state, retry_due_at,
-    commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, failure_class, retry_policy_version,
-    created_at, updated_at, started_at, finished_at
+SELECT run_id, task_id, intent_id, correlation_id, origin_event_id, changelog_id, state, version, attempt, resume_state, retry_due_at, commit_sha, branch, error_code, error_message, lease_owner, lease_epoch, lease_expires_at, created_at, updated_at, started_at, finished_at, failure_class, retry_policy_version
 FROM task_runs
-WHERE state NOT IN ('completed', 'failed', 'cancelled')
+WHERE state NOT IN ('completed', 'failed', 'cancelled', 'queued', 'blocked', 'retry_wait')
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at < $1::timestamptz
 ORDER BY lease_expires_at
@@ -110,45 +124,18 @@ type ListExpiredLeaseRunsParams struct {
 	RowLimit int32              `json:"row_limit"`
 }
 
-type ListExpiredLeaseRunsRow struct {
-	RunID              pgtype.UUID        `json:"run_id"`
-	TaskID             pgtype.UUID        `json:"task_id"`
-	IntentID           pgtype.UUID        `json:"intent_id"`
-	CorrelationID      pgtype.Text        `json:"correlation_id"`
-	OriginEventID      pgtype.UUID        `json:"origin_event_id"`
-	ChangelogID        pgtype.Text        `json:"changelog_id"`
-	State              string             `json:"state"`
-	Version            int64              `json:"version"`
-	Attempt            int32              `json:"attempt"`
-	ResumeState        pgtype.Text        `json:"resume_state"`
-	RetryDueAt         pgtype.Timestamptz `json:"retry_due_at"`
-	CommitSha          pgtype.Text        `json:"commit_sha"`
-	Branch             pgtype.Text        `json:"branch"`
-	ErrorCode          pgtype.Text        `json:"error_code"`
-	ErrorMessage       pgtype.Text        `json:"error_message"`
-	LeaseOwner         pgtype.Text        `json:"lease_owner"`
-	LeaseEpoch         int64              `json:"lease_epoch"`
-	LeaseExpiresAt     pgtype.Timestamptz `json:"lease_expires_at"`
-	FailureClass       pgtype.Text        `json:"failure_class"`
-	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	StartedAt          pgtype.Timestamptz `json:"started_at"`
-	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
-}
-
 // Crash-recovery scan: nonterminal runs whose lease expired. Parked states
 // (retry_wait/blocked/queued) are filtered out by the caller — a parked run's
 // stale lease is an expected leftover, not a dead worker.
-func (q *Queries) ListExpiredLeaseRuns(ctx context.Context, arg ListExpiredLeaseRunsParams) ([]ListExpiredLeaseRunsRow, error) {
+func (q *Queries) ListExpiredLeaseRuns(ctx context.Context, arg ListExpiredLeaseRunsParams) ([]TaskRun, error) {
 	rows, err := q.db.Query(ctx, listExpiredLeaseRuns, arg.Now, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListExpiredLeaseRunsRow
+	var items []TaskRun
 	for rows.Next() {
-		var i ListExpiredLeaseRunsRow
+		var i TaskRun
 		if err := rows.Scan(
 			&i.RunID,
 			&i.TaskID,
@@ -168,12 +155,12 @@ func (q *Queries) ListExpiredLeaseRuns(ctx context.Context, arg ListExpiredLease
 			&i.LeaseOwner,
 			&i.LeaseEpoch,
 			&i.LeaseExpiresAt,
-			&i.FailureClass,
-			&i.RetryPolicyVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.FailureClass,
+			&i.RetryPolicyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -187,11 +174,7 @@ func (q *Queries) ListExpiredLeaseRuns(ctx context.Context, arg ListExpiredLease
 
 const listRetryWaitRunsDue = `-- name: ListRetryWaitRunsDue :many
 
-SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
-    changelog_id, state, version, attempt, resume_state, retry_due_at,
-    commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, failure_class, retry_policy_version,
-    created_at, updated_at, started_at, finished_at
+SELECT run_id, task_id, intent_id, correlation_id, origin_event_id, changelog_id, state, version, attempt, resume_state, retry_due_at, commit_sha, branch, error_code, error_message, lease_owner, lease_epoch, lease_expires_at, created_at, updated_at, started_at, finished_at, failure_class, retry_policy_version
 FROM task_runs
 WHERE state = 'retry_wait'
   AND retry_due_at IS NOT NULL
@@ -205,45 +188,18 @@ type ListRetryWaitRunsDueParams struct {
 	RowLimit int32              `json:"row_limit"`
 }
 
-type ListRetryWaitRunsDueRow struct {
-	RunID              pgtype.UUID        `json:"run_id"`
-	TaskID             pgtype.UUID        `json:"task_id"`
-	IntentID           pgtype.UUID        `json:"intent_id"`
-	CorrelationID      pgtype.Text        `json:"correlation_id"`
-	OriginEventID      pgtype.UUID        `json:"origin_event_id"`
-	ChangelogID        pgtype.Text        `json:"changelog_id"`
-	State              string             `json:"state"`
-	Version            int64              `json:"version"`
-	Attempt            int32              `json:"attempt"`
-	ResumeState        pgtype.Text        `json:"resume_state"`
-	RetryDueAt         pgtype.Timestamptz `json:"retry_due_at"`
-	CommitSha          pgtype.Text        `json:"commit_sha"`
-	Branch             pgtype.Text        `json:"branch"`
-	ErrorCode          pgtype.Text        `json:"error_code"`
-	ErrorMessage       pgtype.Text        `json:"error_message"`
-	LeaseOwner         pgtype.Text        `json:"lease_owner"`
-	LeaseEpoch         int64              `json:"lease_epoch"`
-	LeaseExpiresAt     pgtype.Timestamptz `json:"lease_expires_at"`
-	FailureClass       pgtype.Text        `json:"failure_class"`
-	RetryPolicyVersion pgtype.Text        `json:"retry_policy_version"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	StartedAt          pgtype.Timestamptz `json:"started_at"`
-	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
-}
-
 // VTX-11 retry/DLQ queries. Sweep reads select by predicate; the CAS on
 // task_runs.version (UpdateTaskRunState) is what makes a two-replica sweep a
 // no-op for the loser — no claim column needed.
-func (q *Queries) ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]ListRetryWaitRunsDueRow, error) {
+func (q *Queries) ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]TaskRun, error) {
 	rows, err := q.db.Query(ctx, listRetryWaitRunsDue, arg.Now, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListRetryWaitRunsDueRow
+	var items []TaskRun
 	for rows.Next() {
-		var i ListRetryWaitRunsDueRow
+		var i TaskRun
 		if err := rows.Scan(
 			&i.RunID,
 			&i.TaskID,
@@ -263,12 +219,12 @@ func (q *Queries) ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRun
 			&i.LeaseOwner,
 			&i.LeaseEpoch,
 			&i.LeaseExpiresAt,
-			&i.FailureClass,
-			&i.RetryPolicyVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.FailureClass,
+			&i.RetryPolicyVersion,
 		); err != nil {
 			return nil, err
 		}

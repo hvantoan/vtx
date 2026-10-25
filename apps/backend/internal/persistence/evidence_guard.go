@@ -162,7 +162,7 @@ func (g EvidenceGuards) evaluateTx(ctx context.Context, q *db.Queries, run db.Ta
 		return decision, err
 	}
 	decision.ID = uuidToString(row.DecisionID)
-	if err = insertEvidenceEvent(ctx, q, run, "quality_gate.decision.v1", map[string]any{"decision_id": decision.ID, "attempt": run.Attempt, "subject_commit_sha": decision.SubjectCommitSHA, "verified_head_sha": head, "policy_name": decision.PolicyName, "policy_version": decision.PolicyVersion, "decision": decision.Decision, "conditions": decision.Conditions, "blocking_reasons": decision.BlockingReasons, "lease_epoch": decision.LeaseEpoch}, decision.EvaluatedAt); err != nil {
+	if err = insertEvidenceEvent(ctx, q, run, "quality_gate.decision.v1", map[string]any{"decision_id": decision.ID, "attempt": run.Attempt, "subject_commit_sha": decision.SubjectCommitSHA, "verified_head_sha": head, "policy_name": decision.PolicyName, "policy_version": decision.PolicyVersion, "decision": decision.Decision, "conditions": decision.Conditions, "blocking_reasons": decision.BlockingReasons, "lease_epoch": decision.LeaseEpoch, "evaluator": "gate-engine", "evaluated_at": decision.EvaluatedAt.Format(time.RFC3339Nano)}, decision.EvaluatedAt); err != nil {
 		return decision, err
 	}
 	return decision, nil

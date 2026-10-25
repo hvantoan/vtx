@@ -76,5 +76,6 @@ func (s *Server) Routes() http.Handler {
 		}
 	})
 
+	s.qualityRoutes(r)
 	return r
 }

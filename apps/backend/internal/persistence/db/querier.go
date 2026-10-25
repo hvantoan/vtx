@@ -27,6 +27,9 @@ type Querier interface {
 	// cannot drift apart, so two dispatcher replicas never claim the same event.
 	// Expired claims (claimed_until <= now()) are reclaimable after a crash.
 	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]ClaimOutboxEventsRow, error)
+	// Called only AFTER locking the run and verifying expected_version.
+	// Epoch increment fences the dead worker in the same recovery transaction.
+	ClearExpiredRunLeaseForRetryRecovery(ctx context.Context, runID pgtype.UUID) (int64, error)
 	// Lag of the consumer that reads `event_type` — count + age of the oldest
 	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
 	// the intended signal, not a stuck queue.
@@ -130,13 +133,13 @@ type Querier interface {
 	// Crash-recovery scan: nonterminal runs whose lease expired. Parked states
 	// (retry_wait/blocked/queued) are filtered out by the caller — a parked run's
 	// stale lease is an expected leftover, not a dead worker.
-	ListExpiredLeaseRuns(ctx context.Context, arg ListExpiredLeaseRunsParams) ([]ListExpiredLeaseRunsRow, error)
+	ListExpiredLeaseRuns(ctx context.Context, arg ListExpiredLeaseRunsParams) ([]TaskRun, error)
 	ListGateDecisions(ctx context.Context, runID pgtype.UUID) ([]GateDecision, error)
 	ListQAVerdictEvidenceIDs(ctx context.Context, verdictID pgtype.UUID) ([]pgtype.UUID, error)
 	// VTX-11 retry/DLQ queries. Sweep reads select by predicate; the CAS on
 	// task_runs.version (UpdateTaskRunState) is what makes a two-replica sweep a
 	// no-op for the loser — no claim column needed.
-	ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]ListRetryWaitRunsDueRow, error)
+	ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]TaskRun, error)
 	// Crash reconcile sweep: rows stuck 'running' whose starter is presumed dead.
 	ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]VerificationRun, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)

@@ -37,45 +37,52 @@ var (
 
 // RunSnapshot is a task_runs row as the domain needs it.
 type RunSnapshot struct {
-	RunID          string
-	TaskID         string
-	IntentID       string
-	State          domain.State
-	Version        int64
-	Attempt        int32
-	ResumeState    *domain.State
-	RetryDueAt     *time.Time
-	LeaseOwner     *string
-	LeaseEpoch     int64
-	LeaseExpiresAt *time.Time
-	CorrelationID  string
-	CommitSHA      *string
-	StartedAt      *time.Time
-	FinishedAt     *time.Time
+	RunID              string
+	TaskID             string
+	IntentID           string
+	State              domain.State
+	Version            int64
+	Attempt            int32
+	ResumeState        *domain.State
+	RetryDueAt         *time.Time
+	LeaseOwner         *string
+	LeaseEpoch         int64
+	LeaseExpiresAt     *time.Time
+	CorrelationID      string
+	CommitSHA          *string
+	FailureClass       string
+	RetryPolicyVersion string
+	StartedAt          *time.Time
+	FinishedAt         *time.Time
 }
 
 // TransitionCommand is one caller's transition request.
 type TransitionCommand struct {
-	RunID              string
-	ExpectedVersion    int64
-	ExpectedLeaseEpoch int64
-	Action             domain.Action
-	Actor              domain.Actor
-	ActorType          domain.ActorType
-	Reason             string
-	Metadata           []byte
+	RunID                                       string
+	ExpectedVersion                             int64
+	ExpectedLeaseEpoch                          int64
+	Action                                      domain.Action
+	Actor                                       domain.Actor
+	ActorType                                   domain.ActorType
+	Reason                                      string
+	Metadata                                    []byte
+	RetryDueAt                                  *time.Time
+	FailureClass, RetryPolicyVersion, ErrorCode string
+	// RecoverExpiredLease is internal-only: policy/system may fence a dead worker.
+	RecoverExpiredLease bool
 }
 
 // RunUpdate is the mutable part of a run a transition writes.
 type RunUpdate struct {
-	State        domain.State
-	ResumeState  *domain.State
-	RetryDueAt   *time.Time
-	Attempt      int32
-	ErrorCode    *string
-	ErrorMessage *string
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
+	State                            domain.State
+	ResumeState                      *domain.State
+	RetryDueAt                       *time.Time
+	Attempt                          int32
+	ErrorCode                        *string
+	ErrorMessage                     *string
+	StartedAt                        *time.Time
+	FinishedAt                       *time.Time
+	FailureClass, RetryPolicyVersion *string
 }
 
 // AuditRecord is one task_run_events row.
@@ -280,4 +287,9 @@ func ParseIntentEvent(payload []byte) (IntentEvent, error) {
 // The registry uses EvaluateWithGuard for these; a plain store stays closed.
 type GuardedRegistryStore interface {
 	HasTransitionGuard(domain.State, domain.Action) bool
+}
+
+// RetryPlanner selects a bounded action on the locked snapshot.
+type RetryPlanner interface {
+	PlanFailure(RunSnapshot, TransitionCommand, time.Time) (TransitionCommand, error)
 }

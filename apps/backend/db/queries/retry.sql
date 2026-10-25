@@ -3,11 +3,7 @@
 -- no-op for the loser — no claim column needed.
 
 -- name: ListRetryWaitRunsDue :many
-SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
-    changelog_id, state, version, attempt, resume_state, retry_due_at,
-    commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, failure_class, retry_policy_version,
-    created_at, updated_at, started_at, finished_at
+SELECT *
 FROM task_runs
 WHERE state = 'retry_wait'
   AND retry_due_at IS NOT NULL
@@ -19,13 +15,9 @@ LIMIT sqlc.arg('row_limit')::int;
 -- Crash-recovery scan: nonterminal runs whose lease expired. Parked states
 -- (retry_wait/blocked/queued) are filtered out by the caller — a parked run's
 -- stale lease is an expected leftover, not a dead worker.
-SELECT run_id, task_id, intent_id, correlation_id, origin_event_id,
-    changelog_id, state, version, attempt, resume_state, retry_due_at,
-    commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
-    lease_expires_at, failure_class, retry_policy_version,
-    created_at, updated_at, started_at, finished_at
+SELECT *
 FROM task_runs
-WHERE state NOT IN ('completed', 'failed', 'cancelled')
+WHERE state NOT IN ('completed', 'failed', 'cancelled', 'queued', 'blocked', 'retry_wait')
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at < sqlc.arg('now')::timestamptz
 ORDER BY lease_expires_at
@@ -61,3 +53,12 @@ INSERT INTO delivery_redrives (
 )
 RETURNING redrive_id, outbox_event_id, consumer_name, actor, actor_type,
     reason, correlation_id, redriven_at;
+
+-- name: ClearExpiredRunLeaseForRetryRecovery :execrows
+-- Called only AFTER locking the run and verifying expected_version.
+-- Epoch increment fences the dead worker in the same recovery transaction.
+UPDATE task_runs SET lease_owner = NULL, lease_expires_at = NULL,
+    lease_epoch = lease_epoch + 1
+WHERE run_id = $1 AND lease_owner IS NOT NULL
+    AND lease_expires_at < CURRENT_TIMESTAMP
+    AND state NOT IN ('completed','failed','cancelled','blocked','retry_wait','queued');
