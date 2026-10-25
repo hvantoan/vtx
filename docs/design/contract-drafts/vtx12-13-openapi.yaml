@@ -1,0 +1,378 @@
+# VTX-12/13 OpenAPI 3.1 Delta — coordinator merges into contracts/openapi/v1/openapi.yaml
+# Lane D output. Security schemes already defined: BearerAuth (dashboard/events),
+# RegistryBearer (registry/operator API). Error envelope: ErrorResponse (reused).
+
+openapi: 3.1.0
+paths:
+
+  # ---------------- VTX-12 — Draft PR lifecycle ----------------
+  /api/v1/registry/runs/{run_id}/pull_request:
+    get:
+      summary: PR record for a run (404 when none)
+      security:
+        - RegistryBearer: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Pull request record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PullRequest" }
+        "404":
+          description: No PR for this run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/pull_requests:
+    get:
+      summary: List draft PRs for the ops dashboard
+      security:
+        - RegistryBearer: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [requested, open, closed, merged, failed]
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: Page of PR rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/PullRequest" }
+                  next_cursor: { type: string, nullable: true }
+
+  /api/v1/pull_requests/{run_id}/sync:
+    post:
+      summary: Pull fresh PR status + CI rollup from GitHub (rate-limited 60s/run)
+      security:
+        - RegistryBearer: []   # actors: orchestrator, policy
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Synced record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PullRequest" }
+        "409":
+          description: sync_throttled | run not found in pr_draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ---------------- VTX-13 — Operator dashboard ----------------
+  /api/v1/operator/overview:
+    get:
+      summary: Dashboard histogram + admission + outbox + worker health summary
+      security:
+        - RegistryBearer: []   # actors: operator, policy
+      responses:
+        "200":
+          description: Live overview, all fields measured from rows
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorOverview" }
+
+  /api/v1/operator/runs:
+    get:
+      summary: Cursor-paginated run list joined to task (issue_key), pr_url, commit_sha
+      security:
+        - RegistryBearer: []
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [queued, preparing, coding, verifying, qa, quality_gate,
+                   pr_draft, completed, blocked, retry_wait, failed, cancelled]
+        - name: issue_key
+          in: query
+          schema: { type: string }
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: Page of run list rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RunListItem" }
+                  next_cursor: { type: string, nullable: true }
+
+  /api/v1/operator/runs/{run_id}:
+    get:
+      summary: RunDetailView aggregate — run + worktree + PR + gate verdict + last error
+      security:
+        - RegistryBearer: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Aggregated run detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunDetailView" }
+        "404":
+          description: Run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/operator/outbox:
+    get:
+      summary: Per-event-type outbox lag counters
+      security:
+        - RegistryBearer: []
+      responses:
+        "200":
+          description: Pending/retrying/dead-lettered counts + oldest age per event_type
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: "#/components/schemas/OutboxTypeCounters"
+
+  /api/v1/operator/outbox/dlq:
+    get:
+      summary: Dead-lettered outbox events
+      security:
+        - RegistryBearer: []
+      parameters:
+        - name: "after"
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: DLQ rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DlqEvent" }
+                  next_cursor: { type: string, nullable: true }
+
+  /api/v1/operator/outbox/dlq/{outbox_id}/redrive:
+    post:
+      summary: Redrive a dead-lettered event — operator only, audited
+      security:
+        - RegistryBearer: []
+      parameters:
+        - name: outbox_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "202":
+          description: Redrive accepted (event re-queued, audit row written)
+        "401": { description: Unauthenticated }
+        "403": { description: Actor is not operator }
+        "409":
+          description: not_dead_lettered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/operator/workers:
+    get:
+      summary: Worker heartbeats + computed up/down status, merged with Temporal workers
+      security:
+        - RegistryBearer: []
+      responses:
+        "200":
+          description: Worker rows; status computed as beat < 3x interval
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkerStatus" }
+
+  # ---------------- SSE changes (delta on existing /api/v1/events) ----------------
+  /api/v1/events:
+    get:
+      summary: SSE stream — adds run_id filter, Last-Event-ID resume, credential_in_query guard
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: run_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: text/event-stream of PlatformEvent
+        "401":
+          description: >
+            credential_in_query — requests carrying token/access_token/auth/api_key
+            query params are rejected server-side (FR-UI-004)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+components:
+  schemas:
+    PullRequest:
+      type: object
+      properties:
+        pull_request_id: { type: string, format: uuid }
+        run_id: { type: string, format: uuid }
+        repo_owner: { type: string }
+        repo_name: { type: string }
+        pr_number: { type: integer, nullable: true }
+        pr_url: { type: string, nullable: true }
+        head_branch: { type: string }
+        head_sha: { type: string }
+        base_branch: { type: string }
+        draft: { type: boolean, description: "always true for platform-created PRs" }
+        status: { type: string, enum: [requested, open, closed, merged, failed] }
+        ci_status: { type: string, nullable: true }
+        error_code: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+
+    OperatorOverview:
+      type: object
+      properties:
+        runs_by_state:
+          type: object
+          additionalProperties: { type: integer }
+        deferred_count: { type: integer }
+        admission:
+          type: object
+          properties:
+            max: { type: integer, enum: [3] }
+            active: { type: integer, description: "live slot count; >3 would be an invariant bug" }
+        outbox:
+          type: object
+          properties:
+            pending: { type: integer }
+            retrying: { type: integer }
+            dead_lettered: { type: integer }
+            oldest_age_seconds: { type: integer }
+        workers:
+          type: object
+          properties:
+            up: { type: integer }
+            down: { type: integer }
+
+    RunListItem:
+      type: object
+      properties:
+        run_id: { type: string, format: uuid }
+        issue_key: { type: string }
+        state: { type: string }
+        attempt: { type: integer }
+        commit_sha: { type: string, nullable: true }
+        pr_url: { type: string, nullable: true }
+        lease_owner: { type: string, nullable: true }
+        error_code: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RunDetailView:
+      type: object
+      properties:
+        run: { $ref: "#/components/schemas/RunListItem" }
+        worktree:
+          type: object
+          nullable: true
+          properties:
+            path: { type: string }
+            branch: { type: string }
+            base_sha: { type: string }
+            status: { type: string }
+        pull_request: { $ref: "#/components/schemas/PullRequest", nullable: true }
+        gate_verdict:
+          type: object
+          nullable: true
+          properties:
+            decision: { type: string, enum: [pass, fail] }
+            subject_commit_sha: { type: string }
+            decided_at: { type: string, format: date-time }
+        last_error:
+          type: object
+          nullable: true
+          properties:
+            error_code: { type: string }
+            error_message: { type: string }
+
+    OutboxTypeCounters:
+      type: object
+      properties:
+        pending: { type: integer }
+        retrying: { type: integer }
+        dead_lettered: { type: integer }
+        oldest_age_seconds: { type: integer }
+
+    DlqEvent:
+      type: object
+      properties:
+        outbox_id: { type: string, format: uuid }
+        event_type: { type: string }
+        dead_letter_reason: { type: string }
+        attempt: { type: integer }
+        dead_lettered_at: { type: string, format: date-time }
+        redrive_count: { type: integer }
+
+    WorkerStatus:
+      type: object
+      properties:
+        worker_id: { type: string }
+        worker_kind: { type: string, enum: [scheduler, dispatcher, agent_host, sweeper] }
+        run_id: { type: string, format: uuid, nullable: true }
+        last_beat_at: { type: string, format: date-time }
+        status: { type: string, enum: [up, down], description: "computed: beat < 3x interval" }
+        metadata: { type: object }
