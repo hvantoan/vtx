@@ -18,6 +18,7 @@ Thumbs.db
 *.pem
 *.key
 infra/compose/nginx/certs/
+infra/compose/config/jira.local.yaml
 
 # Go artifacts
 # STRICT CONSTRAINT: NEVER allow go.work or go.work.sum in repository

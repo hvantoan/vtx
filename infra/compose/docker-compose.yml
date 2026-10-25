@@ -88,7 +88,9 @@ services:
       - REGISTRY_ACTOR_POLICY_TOKEN=${REGISTRY_ACTOR_POLICY_TOKEN}
       - REGISTRY_CONSUMER_NAME=${REGISTRY_CONSUMER_NAME:-registry-intake}
     volumes:
-      - ./config/jira.yaml:/etc/vtx/jira.yaml:ro
+      # JIRA_CONFIG_FILE lets setup-vtx-host.sh mount a machine-local generated
+      # policy (jira.local.yaml) without dirtying the committed jira.yaml.
+      - "./config/${JIRA_CONFIG_FILE:-jira.yaml}:/etc/vtx/jira.yaml:ro"
     ports:
       - "${VTX_API_PORT:-49080}:49080"
 
