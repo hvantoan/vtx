@@ -1,451 +1,228 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import {
-  Activity,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  RefreshCw,
-  Server,
-  Database,
-  Workflow,
-  Radio,
-  Cpu,
-  Terminal,
-} from "lucide-react";
-import type {
-  HealthResponse,
-  ReadyResponse,
-  SystemStatusResponse,
-  WorkerStatusResponse,
-  PlatformEvent,
-} from "../types/api";
+import { useEffect, useState } from "react";
+import { AppShell } from "../components/app-shell";
+import { MetricBadge } from "../components/metric-badge";
+import { OutboxPanel } from "../components/outbox-panel";
+import { SseLogViewer } from "../components/sse-log-viewer";
 import {
   fetchHealth,
+  fetchOperatorOverview,
+  fetchOperatorWorkers,
   fetchReady,
   fetchSystemStatus,
   fetchWorkers,
 } from "../lib/api";
+import { formatDuration, formatLatency, formatTimestamp } from "../lib/dashboard";
+import type {
+  DependencyCheck,
+  HealthResponse,
+  OperatorOverview,
+  OperatorWorkerStatus,
+  ReadyResponse,
+  SystemStatusResponse,
+  WorkerStatusResponse,
+} from "../types/api";
+
+interface Probe<T> {
+  data: T | null;
+  latencyMs: number;
+  error: string;
+  checkedAt: string;
+}
+
+const EMPTY_PROBE = { data: null, latencyMs: 0, error: "", checkedAt: "" };
+
+function dependencyPresentation(status: string | undefined) {
+  if (status === "up") return { label: "UP", variant: "success" as const };
+  if (status === "degraded") return { label: "DEGRADED", variant: "warning" as const };
+  if (status === "down") return { label: "DOWN", variant: "destructive" as const };
+  return { label: "UNKNOWN", variant: "neutral" as const };
+}
+
+function HealthCard({ label, endpoint, badge, latency, checkedAt, meta }: {
+  label: string;
+  endpoint: string;
+  badge: { label: string; variant: "success" | "warning" | "destructive" | "neutral" };
+  latency?: number;
+  checkedAt: string;
+  meta: string;
+}) {
+  return (
+    <section aria-label={label} className={`flex min-h-32 flex-col gap-3 rounded-lg border bg-surface p-4 ${badge.variant === "destructive" ? "border-danger/60" : "border-line"}`}>
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        {label} <span className="font-mono font-normal normal-case tracking-normal text-slate-500">· {endpoint}</span>
+      </div>
+      <div className="flex items-center gap-2.5">
+        <MetricBadge label={badge.label} variant={badge.variant} size="md" pulse={badge.variant === "success"} />
+        {latency !== undefined ? <span className="ml-auto font-mono text-xs text-slate-400">{formatLatency(latency)}</span> : null}
+      </div>
+      <div className="mt-auto font-mono text-xs text-slate-500">{meta} · checked {formatTimestamp(checkedAt)}</div>
+    </section>
+  );
+}
+
+function DependencyRow({ name, endpoint, check }: { name: string; endpoint: string; check?: DependencyCheck }) {
+  const badge = dependencyPresentation(check?.status);
+  return (
+    <li className="py-3 hover:bg-elevated">
+      <div className="flex items-center gap-2.5">
+        <span className="text-sm font-medium">{name}</span>
+        <MetricBadge label={badge.label} variant={badge.variant} />
+        <span className="ml-auto font-mono text-xs text-slate-400">{formatLatency(check?.latency_ms)}</span>
+      </div>
+      <div className="mt-1 font-mono text-[11px] text-slate-500">{endpoint}</div>
+      {check?.error ? <div className="mt-1 break-all font-mono text-[11px] text-danger">{check.error}</div> : null}
+    </li>
+  );
+}
 
 export default function DashboardPage() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [healthLatency, setHealthLatency] = useState<number>(0);
-  const [ready, setReady] = useState<ReadyResponse | null>(null);
-  const [readyLatency, setReadyLatency] = useState<number>(0);
+  const [health, setHealth] = useState<Probe<HealthResponse>>(EMPTY_PROBE);
+  const [ready, setReady] = useState<Probe<ReadyResponse>>(EMPTY_PROBE);
   const [system, setSystem] = useState<SystemStatusResponse | null>(null);
   const [workers, setWorkers] = useState<WorkerStatusResponse | null>(null);
-  const [events, setEvents] = useState<PlatformEvent[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [isPaused, setIsPaused] = useState<boolean>(false);
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [operatorWorkers, setOperatorWorkers] = useState<OperatorWorkerStatus[]>([]);
+  const [overview, setOverview] = useState<OperatorOverview | null>(null);
+  const [uptimeSeconds, setUptimeSeconds] = useState<number | undefined>();
+  const [operatorError, setOperatorError] = useState("");
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const loadData = useCallback(async () => {
-    setIsRefreshing(true);
-    const [hRes, rRes, sRes, wRes] = await Promise.all([
-      fetchHealth(),
-      fetchReady(),
-      fetchSystemStatus(),
-      fetchWorkers(),
-    ]);
-
-    setHealth(hRes.data);
-    setHealthLatency(hRes.latencyMs);
-
-    setReady(rRes.data);
-    setReadyLatency(rRes.latencyMs);
-
-    setSystem(sRes.data);
-    setWorkers(wRes.data);
-
-    setLastUpdated(new Date());
-    setIsLoading(false);
-    setIsRefreshing(false);
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => void fetchHealth().then((result) => {
+      if (cancelled) return;
+      setHealth({ data: result.data, latencyMs: result.latencyMs, error: result.error?.message ?? "", checkedAt: new Date().toISOString() });
+      if (result.data) setUptimeSeconds(result.data.uptime_seconds);
+    });
+    poll();
+    const interval = setInterval(poll, 5_000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   useEffect(() => {
-    let ignore = false;
-    const init = async () => {
-      const [hRes, rRes, sRes, wRes] = await Promise.all([
-        fetchHealth(),
-        fetchReady(),
-        fetchSystemStatus(),
-        fetchWorkers(),
-      ]);
-      if (!ignore) {
-        setHealth(hRes.data);
-        setHealthLatency(hRes.latencyMs);
-        setReady(rRes.data);
-        setReadyLatency(rRes.latencyMs);
-        setSystem(sRes.data);
-        setWorkers(wRes.data);
-        setLastUpdated(new Date());
-        setIsLoading(false);
-      }
-    };
-    void init();
-    pollIntervalRef.current = setInterval(loadData, 5000);
-    return () => {
-      ignore = true;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, [loadData]);
+    let cancelled = false;
+    const poll = () => void Promise.all([fetchReady(), fetchWorkers(), fetchOperatorOverview(), fetchOperatorWorkers()]).then(([readyResult, workerResult, overviewResult, operatorWorkerResult]) => {
+      if (cancelled) return;
+      setReady({ data: readyResult.data, latencyMs: readyResult.latencyMs, error: readyResult.error?.message ?? "", checkedAt: new Date().toISOString() });
+      setWorkers(workerResult.data);
+      setOverview(overviewResult.data);
+      setOperatorWorkers(operatorWorkerResult.data?.items ?? []);
+      setOperatorError(overviewResult.error?.message ?? operatorWorkerResult.error?.message ?? "");
+    });
+    poll();
+    const interval = setInterval(poll, 10_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
-  // Connect to SSE stream via fetch streaming with Authorization header (Security fix P2.1)
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    const interval = setInterval(() => {
+      setUptimeSeconds((current) => current === undefined ? undefined : current + 1);
+    }, 1_000);
+    return () => clearInterval(interval);
+  }, []);
 
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:49080";
-    const token = process.env.NEXT_PUBLIC_API_AUTH_TOKEN || "vtx-dev-secret-token-change-in-production";
-    const abortController = new AbortController();
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => void fetchSystemStatus().then((result) => {
+      if (!cancelled) setSystem(result.data);
+    });
+    poll();
+    const interval = setInterval(poll, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
-    async function streamEvents(): Promise<void> {
-      try {
-        const response = await fetch(`${apiBase}/api/v1/events`, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "text/event-stream",
-          },
-          signal: abortController.signal,
-        });
-
-        if (!response.ok || !response.body) {
-          return;
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const blocks = buffer.split("\n\n");
-          buffer = blocks.pop() ?? "";
-
-          for (const block of blocks) {
-            const dataLine = block
-              .split("\n")
-              .find((line) => line.startsWith("data: "));
-            if (dataLine) {
-              const dataStr = dataLine.slice(6).trim();
-              if (dataStr && !isPaused) {
-                try {
-                  const parsed = JSON.parse(dataStr) as PlatformEvent;
-                  setEvents((prev) => [parsed, ...prev].slice(0, 50));
-                } catch {
-                  // ignore parse error
-                }
-              }
-            }
-          }
-        }
-      } catch {
-        // Fetch aborted or network disconnected gracefully
-      }
-    }
-
-    void streamEvents();
-
-    return () => {
-      abortController.abort();
-    };
-  }, [isPaused]);
-
-  const isLive = health?.status === "ok";
-  const isReady = ready?.status === "ready";
-  const dbStatus = ready?.dependencies?.database?.status ?? "down";
-  const temporalStatus = ready?.dependencies?.temporal?.status ?? "down";
+  const livenessBadge = health.data?.status === "ok"
+    ? { label: "UP", variant: "success" as const }
+    : health.error
+      ? { label: "DOWN", variant: "destructive" as const }
+      : { label: "UNKNOWN", variant: "neutral" as const };
+  const readinessBadge = ready.data?.status === "ready"
+    ? { label: "READY", variant: "success" as const }
+    : ready.data?.status === "not_ready"
+      ? { label: "NOT READY", variant: "destructive" as const }
+      : { label: "UNKNOWN", variant: "neutral" as const };
+  const runningWorkers = workers?.workers.filter((worker) => worker.status === "running").length;
+  const workerBadge = !workers
+    ? { label: "UNKNOWN", variant: "neutral" as const }
+    : workers.status === "degraded"
+      ? { label: "DEGRADED", variant: "warning" as const }
+      : runningWorkers && runningWorkers > 0
+        ? { label: "RUNNING", variant: "success" as const }
+        : { label: "STOPPED", variant: "destructive" as const };
+  const dependencies = ready.data?.dependencies;
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans">
-      {/* Top Header */}
-      <header className="border-b border-slate-800 bg-[#111827]/80 backdrop-blur sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="h-9 w-9 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white shadow-lg shadow-blue-500/20">
-            VTX
-          </div>
-          <div>
-            <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              Autonomous Platform Cockpit
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-950 border border-blue-800 text-blue-400 font-mono">
-                Phase 0
-              </span>
-            </h1>
-            <p className="text-xs text-slate-400">
-              Go Backend + Temporal + PostgreSQL 17 + Pi/OMP Agent Runtime
-            </p>
-          </div>
+    <AppShell title="Platform Status">
+      {ready.data?.status === "not_ready" ? (
+        <div role="alert" className="rounded-lg border border-danger/40 border-l-2 bg-danger/10 px-4 py-3 text-sm text-danger">
+          <strong>Readiness check failing.</strong> <span className="text-slate-300">GET <span className="font-mono">/ready</span> reports one or more unavailable dependencies.</span>
         </div>
-
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2 text-xs text-slate-400 font-mono">
-            <Radio className={`h-3 w-3 ${isLive ? "text-emerald-400 animate-pulse" : "text-rose-500"}`} />
-            <span>Poll: 5s</span>
-            <span>•</span>
-            <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
-          </div>
-
-          <button
-            onClick={loadData}
-            disabled={isRefreshing}
-            className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-            <span>Refresh</span>
-          </button>
+      ) : null}
+      {operatorError ? (
+        <div role="alert" className="rounded-lg border border-warning/40 border-l-2 bg-warning/10 px-4 py-3 text-sm text-warning">
+          Operator data unavailable: <span className="text-slate-300">{operatorError}</span>
         </div>
-      </header>
+      ) : null}
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        {/* Row 1: Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Liveness Card */}
-          <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                API Liveness (/health)
-              </span>
-              <Server className="h-4 w-4 text-slate-500" />
-            </div>
-            <div className="mt-4 flex items-baseline justify-between">
-              <div className="flex items-center space-x-2">
-                {isLive ? (
-                  <>
-                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                    <span className="text-xl font-bold text-white">LIVE</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="h-5 w-5 text-rose-500" />
-                    <span className="text-xl font-bold text-rose-400">DOWN</span>
-                  </>
-                )}
-              </div>
-              <span className="text-xs font-mono text-slate-400">{healthLatency}ms</span>
-            </div>
-            <div className="mt-3 text-xs text-slate-400 flex justify-between font-mono">
-              <span>Uptime:</span>
-              <span>{health ? `${Math.round(health.uptime_seconds)}s` : "N/A"}</span>
-            </div>
-          </div>
+      <section aria-label="System status overview" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <HealthCard label="Liveness" endpoint="GET /health" badge={livenessBadge} latency={health.latencyMs} checkedAt={health.checkedAt} meta={health.error || "HTTP process"} />
+        <HealthCard label="Readiness" endpoint="GET /ready" badge={readinessBadge} latency={ready.latencyMs} checkedAt={ready.checkedAt} meta={ready.error || `${Object.keys(dependencies ?? {}).length} dependencies`} />
+        <HealthCard label="Workers" endpoint="GET /api/v1/workers" badge={workerBadge} checkedAt={ready.checkedAt} meta={`${runningWorkers ?? "—"} running · ${workers?.workers.reduce((total, worker) => total + (worker.active_workflows ?? 0), 0) ?? "—"} active`} />
+        <HealthCard label="Uptime" endpoint="/health uptime_seconds" badge={livenessBadge} checkedAt={health.checkedAt} meta={`${formatDuration(uptimeSeconds)} · ${system?.go_version ?? "runtime unknown"}`} />
+      </section>
 
-          {/* Readiness Card */}
-          <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Orchestration (/ready)
-              </span>
-              <Activity className="h-4 w-4 text-slate-500" />
-            </div>
-            <div className="mt-4 flex items-baseline justify-between">
-              <div className="flex items-center space-x-2">
-                {isReady ? (
-                  <>
-                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                    <span className="text-xl font-bold text-white">READY</span>
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="h-5 w-5 text-amber-400" />
-                    <span className="text-xl font-bold text-amber-400">DEGRADED</span>
-                  </>
-                )}
-              </div>
-              <span className="text-xs font-mono text-slate-400">{readyLatency}ms</span>
-            </div>
-            <div className="mt-3 text-xs text-slate-400 flex justify-between font-mono">
-              <span>Dependencies:</span>
-              <span>
-                {dbStatus === "up" && temporalStatus === "up" ? "2/2 Healthy" : "Subsystems Pending"}
-              </span>
-            </div>
-          </div>
+      <section aria-label="Admission and run summary" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="metric-card"><span>Active slots</span><strong>{overview?.admission?.active ?? "—"}/{overview?.admission?.max ?? 3}</strong></div>
+        <div className="metric-card"><span>Deferred</span><strong>{overview?.deferred_count ?? "—"}</strong></div>
+        <div className="metric-card"><span>Worker heartbeats</span><strong>{overview?.workers?.up ?? "—"} up</strong></div>
+        <div className="metric-card"><span>DLQ</span><strong className={overview?.outbox?.dead_lettered ? "text-danger" : ""}>{overview?.outbox?.dead_lettered ?? "—"}</strong></div>
+      </section>
 
-          {/* Temporal Workers */}
-          <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Temporal Workers
-              </span>
-              <Workflow className="h-4 w-4 text-slate-500" />
-            </div>
-            <div className="mt-4 flex items-baseline justify-between">
-              <div className="flex items-center space-x-2">
-                <span className="text-xl font-bold text-white">
-                  {workers?.workers?.length ?? 0} Active
-                </span>
-              </div>
-              <span className="text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800 text-emerald-400 font-mono">
-                Healthy
-              </span>
-            </div>
-            <div className="mt-3 text-xs text-slate-400 flex justify-between font-mono truncate">
-              <span>Queue:</span>
-              <span className="text-slate-300 truncate max-w-[140px]">
-                {workers?.workers?.[0]?.queue ?? "vtx-task-queue"}
-              </span>
-            </div>
-          </div>
+      <div className="grid items-start gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-1">
+          <section aria-label="Dependencies" className="rounded-lg border border-line bg-surface">
+            <header className="flex items-center justify-between border-b border-line px-4 py-3">
+              <h2 className="text-[15px] font-semibold">Dependencies</h2>
+              <span className="font-mono text-[11px] text-slate-500">GET /ready</span>
+            </header>
+            <ul className="divide-y divide-line px-4">
+              <DependencyRow name="PostgreSQL" endpoint="database probe" check={dependencies?.database} />
+              <DependencyRow name="Temporal" endpoint="temporal gRPC probe" check={dependencies?.temporal} />
+              {dependencies?.outbox ? <DependencyRow name="Outbox" endpoint="measured dispatch lag" check={dependencies.outbox} /> : null}
+            </ul>
+          </section>
 
-          {/* System Runtime */}
-          <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Go Runtime Engine
-              </span>
-              <Cpu className="h-4 w-4 text-slate-500" />
-            </div>
-            <div className="mt-4 flex items-baseline justify-between">
-              <span className="text-lg font-bold font-mono text-white">
-                {system?.go_version ?? "Go 1.25+"}
-              </span>
-              <span className="text-xs font-mono text-slate-400">
-                {system?.goroutines ? `${system.goroutines} gr` : ""}
-              </span>
-            </div>
-            <div className="mt-3 text-xs text-slate-400 flex justify-between font-mono">
-              <span>Version:</span>
-              <span>{system?.version ?? "1.0.0"} ({system?.environment ?? "dev"})</span>
-            </div>
-          </div>
+          <section aria-label="Worker heartbeats" className="rounded-lg border border-line bg-surface">
+            <header className="flex items-center justify-between border-b border-line px-4 py-3">
+              <h2 className="text-[15px] font-semibold">Worker Heartbeats</h2>
+              <span className="font-mono text-[11px] text-slate-500">GET /operator/workers</span>
+            </header>
+            <ul className="divide-y divide-line px-4">
+              {operatorWorkers.map((worker) => {
+                const badge = dependencyPresentation(worker.status);
+                return (
+                  <li key={`${worker.worker_kind}-${worker.worker_id}`} className="py-3">
+                    <div className="flex items-center gap-2"><span className="min-w-0 truncate font-mono text-xs">{worker.worker_id ?? "unknown"}</span><span className="ml-auto"><MetricBadge label={badge.label} variant={badge.variant} /></span></div>
+                    <p className="mt-1 font-mono text-[11px] text-slate-500">{worker.worker_kind ?? "unknown"} · beat {formatTimestamp(worker.last_beat_at)}</p>
+                  </li>
+                );
+              })}
+              {operatorWorkers.length === 0 ? <li className="py-6 text-center font-mono text-xs text-slate-500">— no heartbeat rows returned —</li> : null}
+            </ul>
+          </section>
         </div>
+        <div className="lg:col-span-2"><SseLogViewer /></div>
+      </div>
 
-        {/* Row 2: Dependencies Deep Dive */}
-        <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 shadow-sm">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4 flex items-center gap-2">
-            <Database className="h-4 w-4 text-blue-400" />
-            Platform Subsystem & Dependency Probes
-          </h2>
+      <OutboxPanel />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* PostgreSQL Probe */}
-            <div className="border border-slate-800 rounded-lg p-4 bg-[#0d1320] flex items-start justify-between">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <Database className="h-4 w-4 text-blue-400" />
-                  <span className="font-semibold text-white text-sm">PostgreSQL 17 (Platform DB)</span>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  Database: <span className="font-mono text-slate-300">vtx_platform</span> (Goose Migrations + pgx)
-                </p>
-                {ready?.dependencies?.database?.error && (
-                  <p className="text-xs text-rose-400 mt-2 font-mono">
-                    Error: {ready.dependencies.database.error}
-                  </p>
-                )}
-              </div>
-              <div className="text-right">
-                <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium ${
-                    dbStatus === "up"
-                      ? "bg-emerald-950 border border-emerald-800 text-emerald-400"
-                      : "bg-rose-950 border border-rose-800 text-rose-400"
-                  }`}
-                >
-                  {dbStatus.toUpperCase()}
-                </span>
-                <p className="text-xs text-slate-400 mt-1 font-mono">
-                  {ready?.dependencies?.database?.latency_ms ?? 0}ms
-                </p>
-              </div>
-            </div>
-
-            {/* Temporal Server Probe */}
-            <div className="border border-slate-800 rounded-lg p-4 bg-[#0d1320] flex items-start justify-between">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <Workflow className="h-4 w-4 text-purple-400" />
-                  <span className="font-semibold text-white text-sm">Temporal Orchestration Server</span>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  gRPC: <span className="font-mono text-slate-300">localhost:49233</span> (Web UI @ :49234)
-                </p>
-                {ready?.dependencies?.temporal?.error && (
-                  <p className="text-xs text-amber-400 mt-2 font-mono">
-                    Note: {ready.dependencies.temporal.error}
-                  </p>
-                )}
-              </div>
-              <div className="text-right">
-                <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium ${
-                    temporalStatus === "up"
-                      ? "bg-emerald-950 border border-emerald-800 text-emerald-400"
-                      : "bg-amber-950 border border-amber-800 text-amber-400"
-                  }`}
-                >
-                  {temporalStatus.toUpperCase()}
-                </span>
-                <p className="text-xs text-slate-400 mt-1 font-mono">
-                  {ready?.dependencies?.temporal?.latency_ms ?? 0}ms
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Row 3: Live Event Stream Feed */}
-        <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-emerald-400" />
-              Live Telemetry & Server-Sent Events (SSE)
-            </h2>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => setIsPaused(!isPaused)}
-                className="px-2.5 py-1 text-xs rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
-              >
-                {isPaused ? "Resume" : "Pause"}
-              </button>
-              <button
-                onClick={() => setEvents([])}
-                className="px-2.5 py-1 text-xs rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          <div className="bg-[#090d16] border border-slate-800 rounded-lg p-4 font-mono text-xs h-64 overflow-y-auto space-y-2">
-            {events.length === 0 ? (
-              <div className="text-slate-500 text-center py-12">
-                No events streamed yet. Backend will broadcast heartbeats and agent execution events.
-              </div>
-            ) : (
-              events.map((evt, idx) => (
-                <div key={idx} className="flex items-start space-x-3 text-slate-300 border-b border-slate-900 pb-1">
-                  <span className="text-slate-500 whitespace-nowrap">
-                    {new Date(evt.timestamp).toLocaleTimeString()}
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-950 text-blue-400 border border-blue-800 whitespace-nowrap">
-                    {evt.type}
-                  </span>
-                  <span className="text-slate-400 truncate flex-1">
-                    {JSON.stringify(evt.data)}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-[#0d1320] px-6 py-4 text-xs text-slate-500 flex items-center justify-between">
-        <div>VTX Autonomous Development Pipeline • Monorepo Architecture v1.0.0</div>
-        <div>SPEC-001 v1.2 Compliant • Phase 0 Bootstrap</div>
+      <footer className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line pb-4 pt-4 font-mono text-[11px] text-slate-500">
+        <span>version <span className="text-slate-400">{system?.version ?? "—"}</span></span>
+        <span>commit <span className="text-slate-400">{system?.commit ?? "—"}</span></span>
+        <span>env <span className="text-slate-400">{system?.environment ?? "—"}</span></span>
+        <span>{system?.goroutines ?? "—"} goroutines</span>
+        <span className="ml-auto">polls /health 5s · /ready 10s · /workers 10s · /status 30s</span>
       </footer>
-    </div>
+    </AppShell>
   );
 }

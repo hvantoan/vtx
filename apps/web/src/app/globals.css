@@ -1,20 +1,138 @@
 @import "tailwindcss";
 
+@theme {
+  --color-base: #0b0f19;
+  --color-surface: #111827;
+  --color-elevated: #1a2234;
+  --color-line: #1e293b;
+  --color-line-strong: #334155;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --shadow-floating: 0 4px 16px rgb(0 0 0 / 40%);
+}
+
 :root {
-  --background: #0b0f19;
-  --foreground: #f8fafc;
-  --surface: #111827;
-  --surface-border: #1e293b;
-  --accent: #3b82f6;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --destructive: #ef4444;
+  color-scheme: dark;
+}
+
+html {
+  background: var(--color-base);
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   margin: 0;
-  padding: 0;
+  min-width: 320px;
+  overflow-x: hidden;
+  background: var(--color-base);
+  color: #f1f5f9;
+  font-family: var(--font-sans);
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  transition-duration: 150ms;
+  transition-property: color, background-color, border-color;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.font-mono,
+code,
+pre {
+  font-variant-numeric: tabular-nums;
+}
+
+@layer components {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base;
+  }
+
+  .nav-link {
+    @apply min-h-11 rounded-md px-2.5 py-3 text-xs font-semibold text-slate-400 hover:bg-elevated hover:text-slate-100 sm:min-h-0 sm:py-1.5;
+  }
+
+  .button-primary {
+    @apply inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-accent bg-accent px-3 py-2 text-xs font-semibold text-white hover:border-accent-hover hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-8 sm:py-1.5;
+  }
+
+  .button-secondary {
+    @apply inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-line-strong px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-8 sm:py-1.5;
+  }
+
+  .button-danger {
+    @apply inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-danger/50 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-8 sm:py-1.5;
+  }
+
+  .field {
+    @apply min-h-11 rounded-md border border-line-strong bg-base px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40;
+  }
+
+  .metric-card {
+    @apply flex min-h-24 flex-col justify-between rounded-lg border border-line bg-surface p-4;
+  }
+
+  .metric-card > span {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-slate-500;
+  }
+
+  .metric-card > strong {
+    @apply font-mono text-2xl font-medium tabular-nums text-slate-100;
+  }
+
+  .nested-card {
+    @apply flex min-h-24 flex-col gap-1 rounded-lg border border-line bg-base p-3;
+  }
+
+  .nested-card > span {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-slate-500;
+  }
+
+  .nested-card > code {
+    @apply break-all font-mono text-xs text-slate-200;
+  }
+
+  .nested-card > small {
+    @apply break-all font-mono text-[11px] text-slate-500;
+  }
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes event-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.status-pulse {
+  animation: status-pulse 2s ease-in-out infinite;
+  box-shadow: 0 0 6px rgb(59 130 246 / 55%);
+}
+
+.event-enter {
+  animation: event-enter 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.log-scroll {
+  scrollbar-color: var(--color-line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
 }
