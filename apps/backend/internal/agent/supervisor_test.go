@@ -5,6 +5,7 @@ package agent_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -73,14 +74,39 @@ func TestSupervisor_HandshakeAndExecution(t *testing.T) {
 	}
 }
 
+// newGitWorktree materializes the throwaway repo the IPC contract requires:
+// workspace_path must be an existing dir and the fake agent commits into it.
+func newGitWorktree(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	out, err := exec.Command("git", "init", "-q", dir).CombinedOutput()
+	require.NoError(t, err, string(out))
+	return dir
+}
+
+// fakeAgentPath points the real host's CLI adapter at the scripted fixture
+// (VTX_*_BIN env override) so the IPC + workspace + event path runs end-to-end
+// without a real pi/omp agent.
+func fakeAgentPath(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join("..", "..", "..", "agent-runtime", "tests", "fixtures", "fake-agent.sh")
+	if _, err := os.Stat(p); err != nil {
+		t.Skipf("fake agent fixture missing: %v", err)
+	}
+	abs, err := filepath.Abs(p)
+	require.NoError(t, err)
+	return abs
+}
+
 func TestSupervisor_RealNodeHost_Pi(t *testing.T) {
 	hostJsPath := filepath.Join("..", "..", "..", "agent-runtime", "dist", "host.js")
 	if _, err := os.Stat(hostJsPath); os.IsNotExist(err) {
 		t.Skip("compiled agent runtime dist/host.js not found, skipping real node test")
 	}
+	t.Setenv("VTX_PI_BIN", fakeAgentPath(t))
 
 	logger := observability.SetupLogger("error")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	sup, err := agent.Spawn(ctx, "node", []string{hostJsPath}, "pi", logger)
@@ -89,15 +115,16 @@ func TestSupervisor_RealNodeHost_Pi(t *testing.T) {
 
 	var result agent.TaskExecuteResult
 	execParams := map[string]any{
-		"task_id": "real-pi-task",
-		"prompt":  "Implement health check endpoint",
+		"task_id":        "real-pi-task",
+		"prompt":         "Implement health check endpoint",
+		"workspace_path": newGitWorktree(t),
 	}
 
 	err = sup.Call(ctx, "task/execute", execParams, &result)
 	require.NoError(t, err)
 	assert.Equal(t, "real-pi-task", result.TaskID)
 	assert.Equal(t, "succeeded", result.Status)
-	assert.Contains(t, result.Output, "Pi agent successfully executed")
+	assert.Contains(t, result.Output, "done: committed")
 }
 
 func TestSupervisor_RealNodeHost_OMP(t *testing.T) {
@@ -105,9 +132,10 @@ func TestSupervisor_RealNodeHost_OMP(t *testing.T) {
 	if _, err := os.Stat(hostJsPath); os.IsNotExist(err) {
 		t.Skip("compiled agent runtime dist/host.js not found, skipping real node test")
 	}
+	t.Setenv("VTX_OMP_BIN", fakeAgentPath(t))
 
 	logger := observability.SetupLogger("error")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	sup, err := agent.Spawn(ctx, "node", []string{hostJsPath}, "omp", logger)
@@ -116,15 +144,16 @@ func TestSupervisor_RealNodeHost_OMP(t *testing.T) {
 
 	var result agent.TaskExecuteResult
 	execParams := map[string]any{
-		"task_id": "real-omp-task",
-		"prompt":  "Refactor interfaces",
+		"task_id":        "real-omp-task",
+		"prompt":         "Refactor interfaces",
+		"workspace_path": newGitWorktree(t),
 	}
 
 	err = sup.Call(ctx, "task/execute", execParams, &result)
 	require.NoError(t, err)
 	assert.Equal(t, "real-omp-task", result.TaskID)
 	assert.Equal(t, "succeeded", result.Status)
-	assert.Contains(t, result.Output, "OMP agent successfully completed")
+	assert.Contains(t, result.Output, "done: committed")
 }
 
 func TestSupervisor_GracefulShutdownNotification(t *testing.T) {

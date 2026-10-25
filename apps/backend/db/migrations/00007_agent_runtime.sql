@@ -1,5 +1,25 @@
 -- +goose Up
 -- +goose StatementBegin
+-- OD-02 reconcile: the bootstrap-era agent_sessions table (00001, varchar id /
+-- task_id FK — superseded by the registry model) shares this name. Rename it
+-- rather than drop so no existing rows are lost; the rename is guarded on the
+-- OLD shape (no session_id column) so re-runs and fresh schemas are safe.
+DO $$
+BEGIN
+    -- current_schema() = first search_path entry: 'public' normally, the
+    -- isolated test schema under schema-scoped migration runs.
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = current_schema() AND table_name = 'agent_sessions'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'agent_sessions'
+          AND column_name = 'session_id'
+    ) THEN
+        ALTER TABLE agent_sessions RENAME TO agent_sessions_v1;
+    END IF;
+END $$;
+
 -- VTX-7: durable record of every agent host process spawned for a run.
 -- One row per attempt; the UNIQUE is the idempotency key for spawn retries.
 CREATE TABLE IF NOT EXISTS agent_sessions (
@@ -53,4 +73,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_events_run ON agent_events (run_id, event_i
 -- +goose StatementBegin
 DROP TABLE IF EXISTS agent_events;
 DROP TABLE IF EXISTS agent_sessions;
+-- Restore the renamed bootstrap table (data preserved, no loss).
+ALTER TABLE IF EXISTS agent_sessions_v1 RENAME TO agent_sessions;
 -- +goose StatementEnd
