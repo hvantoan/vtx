@@ -14,6 +14,7 @@ import (
 	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/config"
 	"github.com/vtx/platform/internal/gitops"
+	githubintegration "github.com/vtx/platform/internal/integrations/github"
 	"github.com/vtx/platform/internal/integrations/jira"
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
@@ -132,10 +133,28 @@ func main() {
 			os.Exit(1)
 		}
 		registryStore := persistence.NewPgRegistryStore(db.Pool, db.Queries)
-		server.WithRegistry(
-			registryStore,
-			application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger),
-		)
+		registryService := application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger)
+		server.WithRegistry(registryStore, registryService)
+		server.WithSSEEventReader(persistence.NewPgSSEEventReader(db.Queries))
+		server.WithOperator(application.NewOperatorService(
+			persistence.NewPgOperatorStore(db.Pool, db.Queries), application.SystemClock{},
+			cfg.WorkerHeartbeatInterval, cfg.WorkerStaleFactor,
+		))
+		if cfg.GitHubToken != "" {
+			if err := cfg.ValidateGitHub(); err != nil {
+				logger.Error("Invalid GitHub configuration", "error", err)
+				os.Exit(1)
+			}
+			githubClient, err := githubintegration.NewClient(cfg.GitHubAPIBaseURL, cfg.GitHubToken)
+			if err != nil {
+				logger.Error("Invalid GitHub configuration", "error", err)
+				os.Exit(1)
+			}
+			server.WithPullRequests(application.NewPRService(
+				persistence.NewPgPRStore(db.Pool, db.Queries), githubClient, registryService,
+				cfg.PRBaseBranch, cfg.GitHubRepoAllowlist,
+			))
+		}
 		// VTX-4 worktree surface. The API process owns HTTP reads/writes only;
 		// the periodic reconcile lives in the Temporal worker.
 		server.WithWorktree(application.NewWorktreeService(

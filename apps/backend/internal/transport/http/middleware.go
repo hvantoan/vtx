@@ -35,6 +35,20 @@ func LoggerMiddleware(logger *slog.Logger) func(next http.Handler) http.Handler 
 	}
 }
 
+// RejectQueryCredentials enforces that credentials never appear in URLs,
+// which are routinely retained in proxy and browser logs.
+func RejectQueryCredentials(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, key := range []string{"token", "access_token", "auth", "api_key"} {
+			if _, present := r.URL.Query()[key]; present {
+				writeRegistryError(w, http.StatusUnauthorized, "credential_in_query", "credentials must be sent in the Authorization header")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

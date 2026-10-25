@@ -77,6 +77,21 @@ type JiraWebhookInbox struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type OperatorAuditLog struct {
+	AuditID       pgtype.UUID        `json:"audit_id"`
+	Actor         string             `json:"actor"`
+	OperatorID    pgtype.Text        `json:"operator_id"`
+	Action        string             `json:"action"`
+	TargetType    string             `json:"target_type"`
+	TargetID      string             `json:"target_id"`
+	Reason        pgtype.Text        `json:"reason"`
+	CorrelationID pgtype.Text        `json:"correlation_id"`
+	RequestID     pgtype.Text        `json:"request_id"`
+	Outcome       string             `json:"outcome"`
+	Detail        []byte             `json:"detail"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type OutboxEvent struct {
 	OutboxID         pgtype.UUID        `json:"outbox_id"`
 	IntentID         pgtype.UUID        `json:"intent_id"`
@@ -197,6 +212,16 @@ type WebhookReceipt struct {
 	IssueKey    pgtype.Text        `json:"issue_key"`
 	ErrorDetail pgtype.Text        `json:"error_detail"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type WorkerHeartbeat struct {
+	WorkerID   string             `json:"worker_id"`
+	WorkerKind string             `json:"worker_kind"`
+	Queue      pgtype.Text        `json:"queue"`
+	StartedAt  pgtype.Timestamptz `json:"started_at"`
+	LastBeatAt pgtype.Timestamptz `json:"last_beat_at"`
+	ActiveRuns int32              `json:"active_runs"`
+	Metadata   []byte             `json:"metadata"`
 }
 
 type Worktree struct {

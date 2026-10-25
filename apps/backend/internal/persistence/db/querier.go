@@ -27,6 +27,8 @@ type Querier interface {
 	// cannot drift apart, so two dispatcher replicas never claim the same event.
 	// Expired claims (claimed_until <= now()) are reclaimable after a crash.
 	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]ClaimOutboxEventsRow, error)
+	CountActiveRuns(ctx context.Context) (int64, error)
+	CountDeferredIntents(ctx context.Context) (int64, error)
 	// Lag of the consumer that reads `event_type` — count + age of the oldest
 	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
 	// the intended signal, not a stuck queue.
@@ -39,6 +41,7 @@ type Querier interface {
 	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
 	GetGateVerdict(ctx context.Context, arg GetGateVerdictParams) (GetGateVerdictRow, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
+	GetOperatorRunDetail(ctx context.Context, runID pgtype.UUID) (GetOperatorRunDetailRow, error)
 	GetPRRunContext(ctx context.Context, runID pgtype.UUID) (GetPRRunContextRow, error)
 	GetPullRequestByNumber(ctx context.Context, arg GetPullRequestByNumberParams) (PullRequest, error)
 	GetPullRequestByRun(ctx context.Context, runID pgtype.UUID) (PullRequest, error)
@@ -72,6 +75,7 @@ type Querier interface {
 	// Returns the inserted row; ON CONFLICT DO NOTHING yields an empty result on
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
+	InsertOperatorAudit(ctx context.Context, arg InsertOperatorAuditParams) (pgtype.UUID, error)
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error)
 	// VTX-12 draft pull-request persistence.
 	InsertPullRequest(ctx context.Context, arg InsertPullRequestParams) (PullRequest, error)
@@ -95,14 +99,18 @@ type Querier interface {
 	// Reconcile read: every allocated row joined to its run so the caller can see
 	// terminal runs and expired leases without a second query.
 	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
+	ListDeadLettered(ctx context.Context, arg ListDeadLetteredParams) ([]ListDeadLetteredRow, error)
 	// FIFO order is the contract for the admission path (VTX-5).
 	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
 	ListPullRequestsByStatus(ctx context.Context, arg ListPullRequestsByStatusParams) ([]PullRequest, error)
+	ListRunsFiltered(ctx context.Context, arg ListRunsFilteredParams) ([]ListRunsFilteredRow, error)
+	ListSSEEventsAfter(ctx context.Context, arg ListSSEEventsAfterParams) ([]ListSSEEventsAfterRow, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
 	// Cursor on version, and the creation audit (version 0) must be reachable:
 	// a NULL cursor means "from the beginning", not "after 0".
 	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
+	ListWorkerHeartbeats(ctx context.Context) ([]WorkerHeartbeat, error)
 	// Serialize deliveries that refer to the same intent, even when they carry
 	// different source event IDs. The intent row is created before its outbox
 	// event, so a missing row is a payload contract fault.
@@ -114,9 +122,11 @@ type Querier interface {
 	// Guarded transition: 0 rows means the worktree already moved on (a
 	// reconciler raced a release) and the caller must re-read.
 	MarkWorktreeStatus(ctx context.Context, arg MarkWorktreeStatusParams) (Worktree, error)
+	OutboxStatsByType(ctx context.Context) ([]OutboxStatsByTypeRow, error)
 	// Dead letter: unsupported event_type, schema-invalid payload or exhausted
 	// retries. The row is kept (audit) and excluded from claim until redrive.
 	QuarantineOutboxEvent(ctx context.Context, arg QuarantineOutboxEventParams) (int64, error)
+	RedriveDeadLetter(ctx context.Context, outboxID pgtype.UUID) (int64, error)
 	// Operator action: clear the DLQ marker and let the dispatcher try again.
 	RedriveOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
 	// Idempotent release: owner+epoch match required, so a stale owner can never
@@ -126,6 +136,8 @@ type Querier interface {
 	// while the run is live — a terminal run's lease must never be extended.
 	// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
 	RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error)
+	// VTX-13 operator dashboard reads and audited DLQ mutation.
+	RunStateHistogram(ctx context.Context) ([]RunStateHistogramRow, error)
 	// Bounded retry: bump attempt, back off, release the claim so a sibling
 	// replica can pick the event up again.
 	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) (int64, error)
@@ -151,6 +163,7 @@ type Querier interface {
 	// repo_url (VTX-4) is COALESCEd: a caller that does not know the repo yet must
 	// not erase one a previous delivery recorded.
 	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error)
+	UpsertWorkerHeartbeat(ctx context.Context, arg UpsertWorkerHeartbeatParams) error
 }
 
 var _ Querier = (*Queries)(nil)
