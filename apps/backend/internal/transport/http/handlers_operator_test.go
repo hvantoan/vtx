@@ -42,16 +42,76 @@ func (f *fakeOperatorService) Redrive(_ context.Context, _ string, a application
 }
 
 func TestSSERejectsCredentialsInQueryEvenWithValidHeader(t *testing.T) {
-	cfg := &config.Config{AuthToken: "dashboard-token", RegistryActorTokens: map[domain.Actor]string{}}
+	cfg := &config.Config{AuthToken: "dashboard-token", RegistryActorTokens: map[domain.Actor]string{
+		domain.ActorOperator: "op-token", domain.ActorPolicy: "policy-token",
+	}}
 	h := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil).Routes()
-	for _, key := range []string{"token", "access_token", "auth", "api_key"} {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?"+key+"=leaked", nil)
-		req.Header.Set("Authorization", "Bearer dashboard-token")
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
-		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "credential_in_query") {
-			t.Errorf("%s: status=%d body=%s", key, w.Code, w.Body.String())
+	for _, token := range []string{"dashboard-token", "op-token", "policy-token"} {
+		for _, key := range []string{"token", "access_token", "auth", "api_key"} {
+			ctx, cancel := context.WithCancel(context.Background())
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/events?"+key+"=leaked", nil).WithContext(ctx)
+			req.Header.Set("Authorization", "Bearer "+token)
+			w := &cancelOnFlushRecorder{httptest.NewRecorder(), cancel}
+			h.ServeHTTP(w, req)
+			cancel()
+			if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "credential_in_query") {
+				t.Errorf("%s/%s: status=%d body=%s", token, key, w.Code, w.Body.String())
+			}
 		}
+	}
+}
+
+type cancelOnFlushRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w *cancelOnFlushRecorder) Flush() {
+	w.ResponseRecorder.Flush()
+	w.cancel()
+}
+
+func TestSSEAllowsOnlyDashboardOrOperatorReadCredentials(t *testing.T) {
+	cfg := &config.Config{
+		AuthToken: "dashboard-token", GatewayInternalAuthToken: "gateway-token",
+		RegistryActorTokens: map[domain.Actor]string{
+			domain.ActorOperator: "op-token", domain.ActorPolicy: "policy-token",
+			domain.ActorScheduler: "scheduler-token", domain.ActorOrchestrator: "orchestrator-token",
+		},
+	}
+	h := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil).Routes()
+	for _, tc := range []struct {
+		name   string
+		token  string
+		status int
+	}{
+		{"operator", "op-token", http.StatusOK},
+		{"policy", "policy-token", http.StatusOK},
+		{"legacy dashboard", "dashboard-token", http.StatusOK},
+		{"scheduler", "scheduler-token", http.StatusForbidden},
+		{"orchestrator", "orchestrator-token", http.StatusForbidden},
+		{"gateway", "gateway-token", http.StatusUnauthorized},
+		{"unknown", "invalid-token", http.StatusUnauthorized},
+		{"missing", "", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			w := &cancelOnFlushRecorder{httptest.NewRecorder(), cancel}
+			h.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body.String())
+			}
+			if tc.status == http.StatusOK {
+				if w.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(w.Body.String(), "event: system.heartbeat") {
+					t.Fatalf("expected an SSE heartbeat, got headers=%v body=%s", w.Header(), w.Body.String())
+				}
+			}
+		})
 	}
 }
 
