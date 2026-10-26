@@ -60,8 +60,12 @@ paths:
     get:
       summary: SSE stream — adds run_id filter, Last-Event-ID resume, credential_in_query
         guard
+      description: Accepts the legacy dashboard bearer token or a registry operator/policy
+        token, using the same read permissions as the operator console. Scheduler,
+        orchestrator, and gateway credentials do not grant stream access.
       security:
       - BearerAuth: []
+      - RegistryBearer: []
       parameters:
       - name: run_id
         in: query
@@ -78,10 +82,14 @@ paths:
         '200':
           description: text/event-stream of PlatformEvent
         '401':
-          description: 'credential_in_query — requests carrying token/access_token/auth/api_key
-            query params are rejected server-side (FR-UI-004)
-
-            '
+          description: Missing/invalid credentials, or credential_in_query for requests
+            carrying token/access_token/auth/api_key query params (FR-UI-004).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Authenticated registry actor is not permitted to read the stream.
           content:
             application/json:
               schema:

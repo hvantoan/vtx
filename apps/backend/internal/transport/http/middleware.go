@@ -69,6 +69,26 @@ func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Han
 	}
 }
 
+// EventStreamAuthMiddleware accepts operator reads and legacy dashboard clients.
+func EventStreamAuthMiddleware(dashboardToken string, actorTokens map[domain.Actor]string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		operatorHandler := RegistryActorMiddleware(actorTokens)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !allowOperatorRead(w, r) {
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := bearerToken(r)
+			if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(dashboardToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			operatorHandler.ServeHTTP(w, r)
+		})
+	}
+}
+
 // bearerToken extracts the credential from an `Authorization: Bearer <token>`
 // header. Empty when absent or malformed.
 func bearerToken(r *http.Request) string {

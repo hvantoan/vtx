@@ -40,7 +40,7 @@ func (s *Server) Routes() http.Handler {
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
 			r.Use(RejectQueryCredentials)
-			r.Use(BearerAuthMiddleware(s.cfg.AuthToken))
+			r.Use(EventStreamAuthMiddleware(s.cfg.AuthToken, s.cfg.RegistryActorTokens))
 			r.Get("/events", s.HandleSSE)
 		})
 
