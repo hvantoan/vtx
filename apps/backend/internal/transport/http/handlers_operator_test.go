@@ -2,15 +2,12 @@ package http
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/vtx/platform/internal/application"
-	"github.com/vtx/platform/internal/config"
 	"github.com/vtx/platform/internal/domain"
 )
 
@@ -42,20 +39,24 @@ func (f *fakeOperatorService) Redrive(_ context.Context, _ string, a application
 }
 
 func TestSSERejectsCredentialsInQueryEvenWithValidHeader(t *testing.T) {
-	cfg := &config.Config{AuthToken: "dashboard-token", RegistryActorTokens: map[domain.Actor]string{
-		domain.ActorOperator: "op-token", domain.ActorPolicy: "policy-token",
-	}}
-	h := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil).Routes()
-	for _, token := range []string{"dashboard-token", "op-token", "policy-token"} {
+	h := NewServer(authTestConfig(), discardLogger(), nil, nil).WithAuth(newFakeAuthService()).Routes()
+	credentials := []struct {
+		name  string
+		apply func(*http.Request)
+	}{
+		{"policy machine token", withBearer("policy-token")},
+		{"session cookie", withTestSession},
+	}
+	for _, credential := range credentials {
 		for _, key := range []string{"token", "access_token", "auth", "api_key"} {
 			ctx, cancel := context.WithCancel(context.Background())
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/events?"+key+"=leaked", nil).WithContext(ctx)
-			req.Header.Set("Authorization", "Bearer "+token)
+			credential.apply(req)
 			w := &cancelOnFlushRecorder{httptest.NewRecorder(), cancel}
 			h.ServeHTTP(w, req)
 			cancel()
 			if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "credential_in_query") {
-				t.Errorf("%s/%s: status=%d body=%s", token, key, w.Code, w.Body.String())
+				t.Errorf("%s/%s: status=%d body=%s", credential.name, key, w.Code, w.Body.String())
 			}
 		}
 	}
@@ -71,35 +72,29 @@ func (w *cancelOnFlushRecorder) Flush() {
 	w.cancel()
 }
 
-func TestSSEAllowsOnlyDashboardOrOperatorReadCredentials(t *testing.T) {
-	cfg := &config.Config{
-		AuthToken: "dashboard-token", GatewayInternalAuthToken: "gateway-token",
-		RegistryActorTokens: map[domain.Actor]string{
-			domain.ActorOperator: "op-token", domain.ActorPolicy: "policy-token",
-			domain.ActorScheduler: "scheduler-token", domain.ActorOrchestrator: "orchestrator-token",
-		},
-	}
-	h := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil).Routes()
+func TestSSEAllowsOnlyOperatorReadCredentials(t *testing.T) {
+	h := NewServer(authTestConfig(), discardLogger(), nil, nil).WithAuth(newFakeAuthService()).Routes()
 	for _, tc := range []struct {
 		name   string
-		token  string
+		apply  func(*http.Request)
 		status int
 	}{
-		{"operator", "op-token", http.StatusOK},
-		{"policy", "policy-token", http.StatusOK},
-		{"legacy dashboard", "dashboard-token", http.StatusOK},
-		{"scheduler", "scheduler-token", http.StatusForbidden},
-		{"orchestrator", "orchestrator-token", http.StatusForbidden},
-		{"gateway", "gateway-token", http.StatusUnauthorized},
-		{"unknown", "invalid-token", http.StatusUnauthorized},
-		{"missing", "", http.StatusUnauthorized},
+		{"session", withTestSession, http.StatusOK},
+		{"policy", withBearer("policy-token"), http.StatusOK},
+		{"scheduler", withBearer("scheduler-token"), http.StatusForbidden},
+		{"orchestrator", withBearer("orchestrator-token"), http.StatusForbidden},
+		{"legacy operator bearer", withBearer("op-token"), http.StatusUnauthorized},
+		{"legacy dashboard bearer", withBearer("dashboard-token"), http.StatusUnauthorized},
+		{"gateway", withBearer("gateway-token"), http.StatusUnauthorized},
+		{"unknown", withBearer("invalid-token"), http.StatusUnauthorized},
+		{"missing", nil, http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
-			if tc.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tc.token)
+			if tc.apply != nil {
+				tc.apply(req)
 			}
 			w := &cancelOnFlushRecorder{httptest.NewRecorder(), cancel}
 			h.ServeHTTP(w, req)
@@ -117,59 +112,83 @@ func TestSSEAllowsOnlyDashboardOrOperatorReadCredentials(t *testing.T) {
 
 func TestOperatorReadEndpointsRequireAllowedActor(t *testing.T) {
 	fake := &fakeOperatorService{}
-	cfg := &config.Config{AuthToken: "dashboard", RegistryActorTokens: map[domain.Actor]string{
-		domain.ActorOperator: "op-token", domain.ActorPolicy: "policy-token", domain.ActorScheduler: "scheduler-token",
-	}}
-	h := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil).WithOperator(fake).Routes()
+	h := NewServer(authTestConfig(), discardLogger(), nil, nil).
+		WithOperator(fake).WithAuth(newFakeAuthService()).Routes()
 	paths := []string{
 		"/api/v1/operator/overview", "/api/v1/operator/runs", "/api/v1/operator/runs/run-1",
 		"/api/v1/operator/outbox", "/api/v1/operator/outbox/dlq", "/api/v1/operator/workers",
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
-			for _, token := range []string{"op-token", "policy-token"} {
+			for _, allowed := range []struct {
+				name  string
+				apply func(*http.Request)
+			}{{"session", withTestSession}, {"policy", withBearer("policy-token")}} {
 				req := httptest.NewRequest(http.MethodGet, path, nil)
-				req.Header.Set("Authorization", "Bearer "+token)
+				allowed.apply(req)
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, req)
 				if w.Code != http.StatusOK {
-					t.Fatalf("token %s: status=%d body=%s", token, w.Code, w.Body.String())
+					t.Fatalf("%s: status=%d body=%s", allowed.name, w.Code, w.Body.String())
 				}
 			}
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			req.Header.Set("Authorization", "Bearer scheduler-token")
-			w := httptest.NewRecorder()
-			h.ServeHTTP(w, req)
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("scheduler status=%d body=%s", w.Code, w.Body.String())
+			for _, denied := range []struct {
+				name  string
+				apply func(*http.Request)
+				want  int
+			}{
+				{"scheduler", withBearer("scheduler-token"), http.StatusForbidden},
+				{"legacy operator bearer", withBearer("op-token"), http.StatusUnauthorized},
+			} {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				denied.apply(req)
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, req)
+				if w.Code != denied.want {
+					t.Fatalf("%s: status=%d want=%d body=%s", denied.name, w.Code, denied.want, w.Body.String())
+				}
 			}
 		})
 	}
 }
 
-func TestOperatorRedriveRequiresOperatorAndRecordsAttribution(t *testing.T) {
+func TestOperatorRedriveRequiresOperatorSessionAndRecordsAttribution(t *testing.T) {
 	fake := &fakeOperatorService{}
-	cfg := &config.Config{AuthToken: "dashboard", RegistryActorTokens: map[domain.Actor]string{domain.ActorOperator: "op-token", domain.ActorPolicy: "policy-token"}}
-	h := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil).WithOperator(fake).Routes()
+	h := NewServer(authTestConfig(), discardLogger(), nil, nil).
+		WithOperator(fake).WithAuth(newFakeAuthService()).Routes()
 	path := "/api/v1/operator/outbox/dlq/00000000-0000-0000-0000-000000000001/redrive"
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"reason":" retry after fix "}`))
+
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"reason":"retry after fix"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer policy-token")
+	withBearer("policy-token")(req)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("policy status=%d", w.Code)
 	}
+
+	req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"reason":"retry after fix"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withBearer("op-token")(req)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy operator bearer status=%d", w.Code)
+	}
+
 	req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"reason":" retry   after fix "}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer op-token")
-	req.Header.Set("X-Operator-Id", " alice   smith ")
+	// A caller-supplied identity header is ignored: attribution comes from the
+	// authenticated session.
+	req.Header.Set("X-Operator-Id", "mallory")
+	withTestSession(req)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusAccepted {
-		t.Fatalf("operator status=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("session status=%d body=%s", w.Code, w.Body.String())
 	}
-	if len(fake.redrives) != 1 || fake.redrives[0].Actor != "operator" || fake.redrives[0].OperatorID != "alice smith" || fake.redrives[0].Reason != "retry after fix" {
+	if len(fake.redrives) != 1 || fake.redrives[0].Actor != string(domain.ActorOperator) ||
+		fake.redrives[0].OperatorID != "alice" || fake.redrives[0].Reason != "retry after fix" {
 		t.Fatalf("audit=%#v", fake.redrives)
 	}
 }

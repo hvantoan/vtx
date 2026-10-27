@@ -166,7 +166,7 @@ curl -s http://localhost:49080/api/v1/integrations/jira/webhooks
 | 403 at gateway | wrong/stale path secret | check Jira webhook URL vs `WEBHOOK_PATH_SECRET_PRIMARY` |
 | 401 from backend | gateway env mismatch | `GATEWAY_INTERNAL_AUTH_TOKEN` must match in gateway + backend |
 | Sustained 503 | Jira API down / DB down | Jira auto-redelivers; fix upstream; no manual replay needed |
-| `startup fail: GATEWAY_INTERNAL_AUTH_TOKEN …` | token unset or equals `API_AUTH_TOKEN` | set a distinct high-entropy token |
+| `startup fail: GATEWAY_INTERNAL_AUTH_TOKEN …` | token unset or collides with a machine actor token | set a distinct high-entropy token |
 | Duplicate intents for one transition | impossible by unique index — investigate `changelog_id` reuse | inspect `jira_webhook_inbox` rows |
 
 ## Secret hygiene
@@ -174,6 +174,8 @@ curl -s http://localhost:49080/api/v1/integrations/jira/webhooks
 - Path secret lives only in the nginx `map`; `rewrite … break` strips it
   before proxying. Access logs emit `$masked_uri` (`/webhooks/***/jira`).
 - `GATEWAY_INTERNAL_AUTH_TOKEN` is gateway-injected, never client-supplied,
-  and asserted distinct from `API_AUTH_TOKEN` at backend startup.
+  and asserted distinct from every `REGISTRY_ACTOR_*` token at backend
+  startup. Legacy public API bearer tokens are rejected; operators sign in
+  with a session cookie instead.
 - `infra/compose/nginx/certs/` is gitignored; the boundary scanner
   (`check-boundaries.sh`) greps all `PRIVATE KEY` PEM forms.

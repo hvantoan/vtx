@@ -14,7 +14,6 @@ type Config struct {
 	Port              string
 	Host              string
 	Env               string
-	AuthToken         string
 	DatabaseURL       string
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
@@ -36,6 +35,12 @@ type Config struct {
 	JiraProjects             map[string]JiraProjectConfig
 	JiraSiteID               string
 	GatewayInternalAuthToken string
+
+	// App-hosted operator login. SessionTTL is the sliding session lifetime;
+	// SessionCookieSecure is "auto" (Secure when the request is HTTPS,
+	// including a TLS-terminating proxy), "always", or "never".
+	SessionTTL          time.Duration
+	SessionCookieSecure string
 
 	// RegistryConsumerName is the delivery identity of the VTX-3 outbox
 	// dispatcher (all its replicas). Actor tokens own the HTTP API surface; the
@@ -68,6 +73,27 @@ type Config struct {
 	WorkerHeartbeatInterval time.Duration
 	WorkerStaleFactor       int
 
+	// VTX-ORCH orchestration launcher (`worker orchestrate`). Paths are
+	// resolved against the CWD (the repository root, same as `make master`).
+	OrchestratorPiBinary       string
+	OrchestratorExtension      string
+	OrchestratorSpecDir        string
+	OrchestratorLogDir         string
+	OrchestratorMaxParallel    int
+	OrchestratorMaxTurns       int
+	OrchestratorMaxTokens      int
+	OrchestratorWallClock      time.Duration
+	OrchestratorMaxDelegations int
+	OrchestratorClaimStale     time.Duration
+	OrchestratorLeaseRenew     time.Duration
+
+	// VTX-ORCH spine tool server (Phase 1). The Pi orchestrator extension
+	// connects to SpineSocketPath and authenticates each request with
+	// SpineAuthToken. An empty token disables the `worker spine` mode (fail
+	// closed) — the spine is a credential boundary, never unauthenticated.
+	SpineSocketPath string
+	SpineAuthToken  string
+
 	// Legacy env fallback inputs — read in Load(), consumed by
 	// loadJiraIntake(), never read by downstream code.
 	JiraProjectAllowlist  []string
@@ -80,7 +106,6 @@ func Load() *Config {
 		Port:              getEnv("PORT", "49080"),
 		Host:              getEnv("API_HOST", "0.0.0.0"),
 		Env:               getEnv("APP_ENV", "development"),
-		AuthToken:         getEnv("API_AUTH_TOKEN", "vtx-dev-secret-token-change-in-production"),
 		DatabaseURL:       getEnv("DATABASE_URL", "postgres://vtx_user:vtx_password@localhost:49432/vtx_platform?sslmode=disable"),
 		DBMaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 5),
@@ -100,6 +125,10 @@ func Load() *Config {
 		JiraSiteID:               getEnv("JIRA_SITE_ID", ""),
 		GatewayInternalAuthToken: getEnv("GATEWAY_INTERNAL_AUTH_TOKEN", ""),
 
+		// App-hosted operator login.
+		SessionTTL:          getEnvAsDuration("SESSION_TTL", 720*time.Hour),
+		SessionCookieSecure: getEnv("SESSION_COOKIE_SECURE", "auto"),
+
 		// VTX-3 registry intake. The consumer name is the delivery identity
 		// that owns outbox ACKs; all replicas of the dispatcher share it.
 		RegistryConsumerName: getEnv("REGISTRY_CONSUMER_NAME", "registry-intake"),
@@ -117,10 +146,23 @@ func Load() *Config {
 		PRBaseBranch:            getEnv("PR_BASE_BRANCH", "dev"),
 		WorkerHeartbeatInterval: getEnvAsDuration("WORKER_HEARTBEAT_INTERVAL", 15*time.Second),
 		WorkerStaleFactor:       getEnvAsInt("WORKER_STALE_FACTOR", 3),
+
+		OrchestratorPiBinary:       getEnv("ORCHESTRATOR_PI_BINARY", "apps/agent-runtime/node_modules/.bin/pi"),
+		OrchestratorExtension:      getEnv("ORCHESTRATOR_EXTENSION", "apps/agent-runtime/src/orchestrator/vtx-orchestrator.ts"),
+		OrchestratorSpecDir:        getEnv("ORCHESTRATOR_SPEC_DIR", "./var/run/specs"),
+		OrchestratorLogDir:         getEnv("ORCHESTRATOR_LOG_DIR", "./var/run/agent-logs"),
+		OrchestratorMaxParallel:    getEnvAsInt("ORCHESTRATOR_MAX_PARALLEL", 3),
+		OrchestratorMaxTurns:       getEnvAsInt("ORCHESTRATOR_MAX_TURNS", 60),
+		OrchestratorMaxTokens:      getEnvAsInt("ORCHESTRATOR_MAX_TOKENS", 200000),
+		OrchestratorWallClock:      getEnvAsDuration("ORCHESTRATOR_WALL_CLOCK", 2*time.Hour),
+		OrchestratorMaxDelegations: getEnvAsInt("ORCHESTRATOR_MAX_DELEGATIONS", 12),
+		OrchestratorClaimStale:     getEnvAsDuration("ORCHESTRATOR_CLAIM_STALE", 2*time.Minute),
+		OrchestratorLeaseRenew:     getEnvAsDuration("ORCHESTRATOR_LEASE_RENEW", 30*time.Second),
+		SpineSocketPath:            getEnv("SPINE_SOCKET_PATH", "./var/run/vtx-spine.sock"),
+		SpineAuthToken:             getEnv("SPINE_AUTH_TOKEN", ""),
 		RegistryActorTokens: map[domain.Actor]string{
 			domain.ActorScheduler:    getEnv("REGISTRY_ACTOR_SCHEDULER_TOKEN", ""),
 			domain.ActorOrchestrator: getEnv("REGISTRY_ACTOR_ORCHESTRATOR_TOKEN", ""),
-			domain.ActorOperator:     getEnv("REGISTRY_ACTOR_OPERATOR_TOKEN", ""),
 			domain.ActorPolicy:       getEnv("REGISTRY_ACTOR_POLICY_TOKEN", ""),
 		},
 	}
@@ -135,8 +177,13 @@ func (c *Config) Validate() error {
 	if c.GatewayInternalAuthToken == "" {
 		return fmt.Errorf("GATEWAY_INTERNAL_AUTH_TOKEN is required and must not be empty")
 	}
-	if c.GatewayInternalAuthToken == c.AuthToken {
-		return fmt.Errorf("GATEWAY_INTERNAL_AUTH_TOKEN must differ from API_AUTH_TOKEN (the public dashboard token)")
+	switch strings.ToLower(c.SessionCookieSecure) {
+	case "auto", "always", "never":
+	default:
+		return fmt.Errorf("SESSION_COOKIE_SECURE must be auto, always or never (got %q)", c.SessionCookieSecure)
+	}
+	if c.SessionTTL <= 0 {
+		return fmt.Errorf("SESSION_TTL must be positive (got %s)", c.SessionTTL)
 	}
 	if c.jiraConfigErr != nil {
 		return c.jiraConfigErr
@@ -151,6 +198,22 @@ func (c *Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// ValidateJiraIntake checks the Jira fields the poll-intake path needs. Unlike
+// Validate it does not require gateway tokens, so the spine tool server can
+// expose intake without the webhook's transport secret.
+func (c *Config) ValidateJiraIntake() error {
+	if c.jiraConfigErr != nil {
+		return c.jiraConfigErr
+	}
+	if missing := requiredJira(c); len(missing) > 0 {
+		return fmt.Errorf("%s is required for the Jira poll intake", missing[0])
+	}
+	if !strings.HasPrefix(c.JiraBaseURL, "https://") && !strings.HasPrefix(c.JiraBaseURL, "http://") {
+		return fmt.Errorf("JIRA_BASE_URL must be an http(s) URL (got %q)", c.JiraBaseURL)
+	}
+	return c.validateJiraProjects()
 }
 
 func requiredJira(c *Config) []string {

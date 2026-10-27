@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { SessionControls } from "./session";
 
 interface AppShellProps {
   title: string;
@@ -27,6 +28,7 @@ export function AppShell({ title, eyebrow = "Operator Console", children }: AppS
             <Link href="/runs" className="nav-link focus-ring">Runs</Link>
             <Link href="/settings" className="nav-link focus-ring">Settings</Link>
           </nav>
+          <SessionControls />
         </div>
       </header>
       <main className="mx-auto max-w-7xl space-y-4 px-4 py-6 sm:px-6">

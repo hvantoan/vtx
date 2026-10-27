@@ -38,10 +38,13 @@ func (m *mockWorkerDependency) CheckWorkers(ctx context.Context, queue string) (
 
 func setupTestServer(db transporthttp.DependencyChecker, temporal transporthttp.DependencyChecker) (http.Handler, *config.Config) {
 	cfg := &config.Config{
-		Port:          "49080",
-		Env:           "test",
-		AuthToken:     "test-secret-token",
-		TemporalQueue: "test-queue",
+		Port:                     "49080",
+		Env:                      "test",
+		TemporalQueue:            "test-queue",
+		GatewayInternalAuthToken: "test-gateway-token",
+		RegistryActorTokens: map[domain.Actor]string{
+			domain.ActorPolicy: "test-policy-token",
+		},
 	}
 	logger := observability.SetupLogger("error")
 	srv := transporthttp.NewServer(cfg, logger, db, temporal)
@@ -155,7 +158,7 @@ func TestSSE_AuthenticatedSuccess(t *testing.T) {
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
-	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	req.Header.Set("Authorization", "Bearer "+cfg.RegistryActorTokens[domain.ActorPolicy])
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)

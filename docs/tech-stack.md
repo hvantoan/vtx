@@ -42,7 +42,7 @@
 ### ADR-0003: Chi Router for HTTP Transport
 - **Context:** REST endpoints (`/health`, `/ready`), authenticated SSE (`/events`), and OpenAPI compliance.
 - **Decision:** Use `go-chi/chi/v5`.
-- **Consequences:** Native `http.Handler` interoperability; straightforward middleware for CORS, request ID, structured request logging, and Bearer token auth.
+- **Consequences:** Native `http.Handler` interoperability; straightforward middleware for CORS, request ID, structured request logging, session-cookie auth for operators, and bearer-token auth for machine actors.
 
 ### ADR-0004: NDJSON Framing for Agent Runtime IPC
 - **Context:** Go supervisor spawns and coordinates Node.js Pi/OMP host over stdio.

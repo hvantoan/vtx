@@ -70,7 +70,9 @@ services:
       - TEMPORAL_HOST_PORT=temporal:7233
       - TEMPORAL_NAMESPACE=default
       - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-vtx-task-queue}
-      - API_AUTH_TOKEN=vtx-dev-secret-token-change-in-production
+      # Operator login sessions; secrets stay in env, never baked into images.
+      - SESSION_TTL=${SESSION_TTL:-720h}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-auto}
       - JIRA_BASE_URL=${JIRA_BASE_URL}
       - JIRA_API_EMAIL=${JIRA_API_EMAIL}
       - JIRA_API_TOKEN=${JIRA_API_TOKEN}
@@ -84,7 +86,6 @@ services:
       # Compose only forwards listed vars, so they must appear here.
       - REGISTRY_ACTOR_SCHEDULER_TOKEN=${REGISTRY_ACTOR_SCHEDULER_TOKEN}
       - REGISTRY_ACTOR_ORCHESTRATOR_TOKEN=${REGISTRY_ACTOR_ORCHESTRATOR_TOKEN}
-      - REGISTRY_ACTOR_OPERATOR_TOKEN=${REGISTRY_ACTOR_OPERATOR_TOKEN}
       - REGISTRY_ACTOR_POLICY_TOKEN=${REGISTRY_ACTOR_POLICY_TOKEN}
       - REGISTRY_CONSUMER_NAME=${REGISTRY_CONSUMER_NAME:-registry-intake}
     volumes:
@@ -138,7 +139,8 @@ services:
     depends_on:
       - backend
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:${VTX_API_PORT:-49080}
+      # Same-origin proxy target; override at runtime for a remote API.
+      - INTERNAL_API_URL=http://backend:49080
       - NEXT_PUBLIC_APP_ENV=development
     ports:
       - "${VTX_WEB_PORT:-49030}:49030"

@@ -48,7 +48,7 @@ The bootstrap delivers:
 2. **Logging Library:** Standard library `log/slog` with JSON handler for zero-dependency structured logging and OpenTelemetry compatibility.
 3. **HTTP Router:** `go-chi/chi/v5` for 100% `net/http` compatibility, zero magic, high throughput, and robust middleware chaining.
 4. **Local Artifact Storage:** Local filesystem storage adapter (`infra/storage`) implementing an `ArtifactStore` interface with S3-compatible design abstraction.
-5. **Authentication Mechanism:** Static Bearer token (`API_AUTH_TOKEN`, default dev fallback) for protected endpoints (e.g. SSE stream, worker control), while `/health` (liveness) and `/ready` (dependency readiness) are unauthenticated.
+5. **Authentication Mechanism:** App-hosted operator login (username/password, argon2id, server-side `vtx_session` cookie) for human endpoints such as the SSE stream and dashboard controls; machine principals use per-actor bearer tokens. `/health` (liveness) and `/ready` (dependency readiness) remain unauthenticated. This supersedes the earlier static `API_AUTH_TOKEN` decision.
 6. **Agent Runtime Isolation:** Go supervisor manages child Node processes using Unix process groups (`syscall.Setpgid(0, 0)` and `syscall.Kill(-pgid, syscall.SIGKILL)` on Linux) to guarantee prompt cleanup.
 
 ---

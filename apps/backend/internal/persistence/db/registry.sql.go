@@ -462,6 +462,58 @@ func (q *Queries) LockExecutionIntent(ctx context.Context, intentID pgtype.UUID)
 	return intent_id, err
 }
 
+const recordRunCommitSHA = `-- name: RecordRunCommitSHA :execrows
+UPDATE task_runs
+SET commit_sha = $1::text,
+    updated_at = CURRENT_TIMESTAMP
+WHERE run_id = $2::uuid
+  AND state = 'coding'
+  AND (commit_sha IS NULL OR commit_sha = '')
+`
+
+type RecordRunCommitSHAParams struct {
+	CommitSha string      `json:"commit_sha"`
+	RunID     pgtype.UUID `json:"run_id"`
+}
+
+// VTX-ORCH: no supervisor owns the Pi lifecycle, so the registry records the
+// worktree HEAD as the run's subject commit inside the coding→verifying
+// transition tx (FR-AGT-001: SHA captured by the system, never agent-reported).
+// Only fills an empty slot in the coding state; an existing SHA is never
+// rewritten here (SHA drift is the evidence guard's job to reject).
+func (q *Queries) RecordRunCommitSHA(ctx context.Context, arg RecordRunCommitSHAParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordRunCommitSHA, arg.CommitSha, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const repinRunCommitSHA = `-- name: RepinRunCommitSHA :execrows
+UPDATE task_runs
+SET commit_sha = $1::text,
+    updated_at = CURRENT_TIMESTAMP
+WHERE run_id = $2::uuid
+  AND state = 'verifying'
+`
+
+type RepinRunCommitSHAParams struct {
+	CommitSha string      `json:"commit_sha"`
+	RunID     pgtype.UUID `json:"run_id"`
+}
+
+// VTX-ORCH: a commit made after coding→verifying fast-forwards the branch. The
+// verifier re-pins the subject to that HEAD (ancestry checked in Go, never
+// agent-reported) so QA and the gate evaluate the commit that will ship.
+// Rewritten history never reaches this query: the caller keeps it stale.
+func (q *Queries) RepinRunCommitSHA(ctx context.Context, arg RepinRunCommitSHAParams) (int64, error) {
+	result, err := q.db.Exec(ctx, repinRunCommitSHA, arg.CommitSha, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateTaskRunState = `-- name: UpdateTaskRunState :one
 UPDATE task_runs
 SET state = $2,

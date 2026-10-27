@@ -269,8 +269,14 @@ func operatorLimit(w http.ResponseWriter, r *http.Request) (int32, bool) {
 	}
 	return int32(n), true
 }
+
+// operatorID is the audit identity for an operator mutation. It comes from the
+// authenticated session, never from a caller-supplied header.
 func operatorID(r *http.Request) string {
-	return sanitizeHeaderValue(r.Header.Get("X-Operator-Id"), 64)
+	if session, ok := SessionFromContext(r.Context()); ok {
+		return sanitizeHeaderValue(session.Username, 64)
+	}
+	return ""
 }
 func sanitizeHeaderValue(v string, max int) string {
 	v = strings.Join(strings.Fields(v), " ")

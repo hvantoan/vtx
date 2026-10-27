@@ -46,6 +46,8 @@ type Server struct {
 	pullRequests PullRequestService
 	operator     OperatorService
 	sseEvents    SSEEventReader
+	// App-hosted operator login. Nil until WithAuth is called.
+	auth AuthService
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {

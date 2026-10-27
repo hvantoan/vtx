@@ -15,6 +15,9 @@ RUN pnpm install --frozen-lockfile --filter @vtx/web
 COPY apps/web apps/web
 
 ENV NEXT_TELEMETRY_DISABLED=1
+# The API proxy target is read at request time, so one image serves the
+# Cloudflare Tunnel and a LAN address without a rebuild.
+ENV INTERNAL_API_URL=http://backend:49080
 RUN pnpm --filter @vtx/web build
 
 # Runtime stage

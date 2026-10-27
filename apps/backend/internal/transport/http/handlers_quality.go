@@ -40,7 +40,7 @@ func (s *Server) qualityRoutes(r chi.Router) {
 			r.With(GatewayAuthMiddleware(s.qaToken)).Post("/runs/{run_id}/qa/verdict", s.HandleQASubmit)
 		}
 		r.Group(func(r chi.Router) {
-			r.Use(RegistryActorMiddleware(s.cfg.RegistryActorTokens))
+			r.Use(s.actorMiddleware)
 			if s.qa != nil {
 				r.Post("/runs/{run_id}/qa/session", s.HandleQALaunch)
 				r.Get("/runs/{run_id}/qa/verdict", s.HandleQARead)

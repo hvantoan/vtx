@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/domain"
 	"github.com/vtx/platform/internal/gate"
@@ -65,29 +66,52 @@ func (g EvidenceGuards) GuardMap() map[TransitionKey]TransitionGuard {
 	}
 	return m
 }
-func (g EvidenceGuards) resolveHead(ctx context.Context, q *db.Queries, run db.TaskRun) (string, error) {
+func (g EvidenceGuards) resolveHead(ctx context.Context, q *db.Queries, run db.TaskRun) (string, db.Worktree, error) {
 	wt, err := q.GetWorktreeByRun(ctx, run.RunID)
 	if err != nil {
-		return "", fmt.Errorf("gate worktree: %w", err)
+		return "", db.Worktree{}, fmt.Errorf("gate worktree: %w", err)
 	}
 	if wt.Status != "allocated" {
-		return "", domain.ErrEvidenceInvalid
+		return "", db.Worktree{}, domain.ErrEvidenceInvalid
 	}
 	path, err := gitops.CanonicalPath(g.WorktreeRoot, wt.Path)
 	if err != nil {
-		return "", err
+		return "", db.Worktree{}, err
 	}
-	return g.Head.HeadSHA(ctx, path)
+	sha, err := g.Head.HeadSHA(ctx, path)
+	if err != nil {
+		return "", db.Worktree{}, err
+	}
+	return sha, wt, nil
 }
 func (g EvidenceGuards) Check(ctx context.Context, q *db.Queries, run db.TaskRun, cmd application.TransitionCommand, plan *application.TransitionPlan) error {
 	snapshot := snapshotFromTaskRun(run)
 	switch snapshot.State {
 	case domain.StateCoding:
-		sha, err := g.resolveHead(ctx, q, run)
+		sha, wt, err := g.resolveHead(ctx, q, run)
 		if err != nil {
 			return err
 		}
-		if !run.CommitSha.Valid || run.CommitSha.String == "" || sha != run.CommitSha.String {
+		if !run.CommitSha.Valid || run.CommitSha.String == "" {
+			// VTX-ORCH: the Pi launcher has no supervisor to capture the agent
+			// result, so the transition records the worktree HEAD itself —
+			// inside the same tx, and never from agent self-report.
+			if wt.BaseSha.Valid && wt.BaseSha.String == sha {
+				return fmt.Errorf("%w: worktree HEAD equals the base commit %s (delegate the implementation and commit first)", domain.ErrEvidenceInvalid, sha)
+			}
+			n, err := q.RecordRunCommitSHA(ctx, db.RecordRunCommitSHAParams{RunID: run.RunID, CommitSha: sha})
+			if err != nil {
+				return fmt.Errorf("record run commit: %w", err)
+			}
+			if n != 1 {
+				return domain.ErrEvidenceInvalid
+			}
+			run.CommitSha = pgtype.Text{String: sha, Valid: true}
+			if err := addAuditMetadata(plan, "commit_sha", sha); err != nil {
+				return err
+			}
+		}
+		if sha != run.CommitSha.String {
 			return domain.ErrEvidenceInvalid
 		}
 	case domain.StateVerifying:
@@ -140,7 +164,7 @@ func addAuditMetadata(plan *application.TransitionPlan, key, value string) error
 	return nil
 }
 func (g EvidenceGuards) evaluateTx(ctx context.Context, q *db.Queries, run db.TaskRun, epoch int64) (gate.Decision, error) {
-	head, err := g.resolveHead(ctx, q, run)
+	head, _, err := g.resolveHead(ctx, q, run)
 	if err != nil {
 		return gate.Decision{}, err
 	}

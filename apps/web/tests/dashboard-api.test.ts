@@ -3,6 +3,7 @@ import {
   buildEventStreamRequest,
   fetchHealth,
   fetchReady,
+  login,
   postTransition,
   redriveDlq,
 } from "../src/lib/api";
@@ -16,16 +17,18 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function lastRequest() {
+  const [url, init] = vi.mocked(fetch).mock.calls.at(-1) ?? [];
+  return { url: String(url), init };
+}
+
 describe("operator API client", () => {
   beforeEach(() => {
-    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "https://operator.example.test");
-    vi.stubEnv("NEXT_PUBLIC_API_AUTH_TOKEN", "test-operator-token");
     vi.stubGlobal("fetch", vi.fn());
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
   });
 
   it("reads liveness and accepts the readiness 503 contract", async () => {
@@ -40,12 +43,13 @@ describe("operator API client", () => {
     const health = await fetchHealth();
     const ready = await fetchReady();
 
+    expect(lastRequest().url).toBe("/ready");
     expect(health.data?.status).toBe("ok");
     expect(ready.data?.status).toBe("not_ready");
     expect(ready.error).toBeNull();
   });
 
-  it("sends authenticated transition mutations with the current version and reason", async () => {
+  it("posts transitions to the same-origin path with the session cookie", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(response({
       run_id: RUN_ID,
       task_id: RUN_ID,
@@ -57,10 +61,12 @@ describe("operator API client", () => {
 
     await postTransition(RUN_ID, 7, "block", "operator review");
 
-    const [url, init] = vi.mocked(fetch).mock.calls[0] ?? [];
+    const { url, init } = lastRequest();
     const headers = new Headers(init?.headers);
-    expect(String(url)).toBe(`https://operator.example.test/api/v1/registry/runs/${RUN_ID}/transitions`);
-    expect(headers.get("Authorization")).toBe("Bearer test-operator-token");
+    expect(url).toBe(`/api/v1/registry/runs/${RUN_ID}/transitions`);
+    expect(init?.credentials).toBe("include");
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("X-Operator-Id")).toBeNull();
     expect(JSON.parse(String(init?.body))).toEqual({
       expected_version: 7,
       action: "block",
@@ -68,26 +74,47 @@ describe("operator API client", () => {
     });
   });
 
-  it("authenticates DLQ redrive and surfaces typed conflicts", async () => {
+  it("redrives DLQ events and surfaces typed conflicts", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(response({ error: "not_dead_lettered", message: "Already redriven" }, 409));
 
     const result = await redriveDlq(RUN_ID, "retry after dependency recovery");
 
-    const [, init] = vi.mocked(fetch).mock.calls[0] ?? [];
-    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-operator-token");
+    const { init } = lastRequest();
+    expect(new Headers(init?.headers).get("Authorization")).toBeNull();
     expect(result.status).toBe(409);
     expect(result.error?.error).toBe("not_dead_lettered");
   });
 
-  it("never places credentials in the SSE URL and resumes with Last-Event-ID", () => {
+  it("logs in with credentials only; the server owns the session token", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(response({
+      username: "operator",
+      expires_at: "2026-11-26T00:00:00Z",
+    }));
+
+    const result = await login(" operator ", "correct horse battery staple");
+
+    const { url, init } = lastRequest();
+    expect(url).toBe("/api/v1/auth/login");
+    expect(init?.method).toBe("POST");
+    expect(init?.credentials).toBe("include");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      username: "operator",
+      password: "correct horse battery staple",
+    });
+    expect(result.data?.username).toBe("operator");
+  });
+
+  it("streams SSE from the same origin without credentials in the URL", () => {
     const request = buildEventStreamRequest(RUN_ID, "event-42");
-    expect(request).not.toBeNull();
-    const url = new URL(request?.url ?? "https://invalid.test");
+    const url = new URL(request.url, "https://operator.example.test");
+    expect(url.pathname).toBe("/api/v1/events");
     expect(url.searchParams.get("run_id")).toBe(RUN_ID);
     expect(url.searchParams.has("token")).toBe(false);
     expect(url.searchParams.has("auth")).toBe(false);
-    const headers = new Headers(request?.init.headers);
-    expect(headers.get("Authorization")).toBe("Bearer test-operator-token");
+
+    const headers = new Headers(request.init.headers);
+    expect(headers.get("Authorization")).toBeNull();
     expect(headers.get("Last-Event-ID")).toBe("event-42");
+    expect(request.init.credentials).toBe("include");
   });
 });

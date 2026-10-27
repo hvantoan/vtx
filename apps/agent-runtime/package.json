@@ -11,16 +11,24 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "start": "node dist/host.js"
+    "start": "node dist/host.js",
+    "master": "node dist/master/index.js",
+    "master:once": "node dist/master/index.js --once",
+    "dev:master": "tsx src/master/index.ts"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.13.0",
     "eslint": "^9.39.5",
     "globals": "^17.13.0",
     "tsx": "^4.19.2",
+    "typebox": "^1.4.3",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.71.2",
     "vitest": "^3.0.4"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
   }
 }

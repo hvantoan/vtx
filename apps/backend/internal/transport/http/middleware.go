@@ -3,11 +3,13 @@ package http
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/domain"
 )
 
@@ -69,24 +71,15 @@ func BearerAuthMiddleware(expectedToken string) func(next http.Handler) http.Han
 	}
 }
 
-// EventStreamAuthMiddleware accepts operator reads and legacy dashboard clients.
-func EventStreamAuthMiddleware(dashboardToken string, actorTokens map[domain.Actor]string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		operatorHandler := RegistryActorMiddleware(actorTokens)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !allowOperatorRead(w, r) {
-				return
-			}
-			next.ServeHTTP(w, r)
-		}))
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := bearerToken(r)
-			if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(dashboardToken)) == 1 {
-				next.ServeHTTP(w, r)
-				return
-			}
-			operatorHandler.ServeHTTP(w, r)
-		})
-	}
+// streamAuthMiddleware restricts the SSE stream to operator reads: an app
+// session (the dashboard) or the policy machine token.
+func (s *Server) streamAuthMiddleware(next http.Handler) http.Handler {
+	return s.actorMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowOperatorRead(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
 }
 
 // bearerToken extracts the credential from an `Authorization: Bearer <token>`
@@ -104,8 +97,8 @@ func bearerToken(r *http.Request) string {
 }
 
 // GatewayAuthMiddleware guards the Jira webhook intake on the dedicated
-// internal token injected by the Nginx gateway — provably separate from the
-// public dashboard API_AUTH_TOKEN (asserted at startup in config.Validate).
+// internal token injected by the Nginx gateway — a credential that never opens
+// an actor or operator surface.
 func GatewayAuthMiddleware(internalToken string) func(next http.Handler) http.Handler {
 	return BearerAuthMiddleware(internalToken)
 }
@@ -130,28 +123,34 @@ func (rw *responseWriter) Flush() {
 // type is unexported so no other package can forge an actor.
 type registryActorKey struct{}
 
-// RegistryActorMiddleware authenticates a registry caller and stores the actor
-// it may act as. The actor is derived ONLY from the token (D5): a request body
-// can never choose its own principal.
+// sessionKey is the context key for the authenticated app session. Unexported
+// so no other package can forge one.
+type sessionKey struct{}
+
+// SessionFromContext returns the app session behind the request, when the
+// caller authenticated with a session cookie.
+func SessionFromContext(ctx context.Context) (application.AuthSession, bool) {
+	session, ok := ctx.Value(sessionKey{}).(application.AuthSession)
+	return session, ok
+}
+
+// actorMiddleware authenticates a registry caller and stores the actor it may
+// act as. Machine tokens map to their fixed actor; an app session maps to the
+// operator actor. The actor is derived ONLY from the credential (D5): a request
+// body can never choose its own principal.
 //
-// Every configured token is compared in constant time before any branch, so the
-// response time does not reveal which slot (or whether any slot) matched.
-func RegistryActorMiddleware(tokens map[domain.Actor]string) func(next http.Handler) http.Handler {
+// A bearer token, when present, is authoritative: an invalid machine token is
+// rejected even if a valid session cookie is also attached.
+func (s *Server) actorMiddleware(next http.Handler) http.Handler {
 	// Fixed evaluation order keeps the comparison count independent of input.
-	order := []domain.Actor{domain.ActorScheduler, domain.ActorOrchestrator, domain.ActorOperator, domain.ActorPolicy}
+	order := []domain.Actor{domain.ActorScheduler, domain.ActorOrchestrator, domain.ActorPolicy}
 
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := bearerToken(r)
-			if token == "" {
-				writeRegistryError(w, http.StatusUnauthorized, "unauthorized", "Missing authorization token in Authorization header")
-				return
-			}
-
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token := bearerToken(r); token != "" {
 			var actor domain.Actor
 			matched := 0
 			for _, candidate := range order {
-				expected := tokens[candidate]
+				expected := s.cfg.RegistryActorTokens[candidate]
 				if expected == "" {
 					continue
 				}
@@ -166,10 +165,29 @@ func RegistryActorMiddleware(tokens map[domain.Actor]string) func(next http.Hand
 				writeRegistryError(w, http.StatusUnauthorized, "unauthorized", "Invalid authentication token")
 				return
 			}
-
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), registryActorKey{}, actor)))
-		})
-	}
+			return
+		}
+
+		if s.auth != nil {
+			if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+				session, err := s.auth.Authenticate(r.Context(), cookie.Value)
+				switch {
+				case err == nil:
+					ctx := context.WithValue(r.Context(), registryActorKey{}, domain.ActorOperator)
+					ctx = context.WithValue(ctx, sessionKey{}, session)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				case !errors.Is(err, application.ErrSessionInvalid):
+					s.logger.Error("session authentication failed", "error", err)
+					writeRegistryError(w, http.StatusInternalServerError, "internal_error", "internal error")
+					return
+				}
+			}
+		}
+
+		writeRegistryError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+	})
 }
 
 // RegistryActorFromContext returns the authenticated principal.

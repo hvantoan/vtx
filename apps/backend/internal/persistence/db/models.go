@@ -30,6 +30,16 @@ type AgentSession struct {
 	EndedAt   pgtype.Timestamptz `json:"ended_at"`
 }
 
+type AuthSession struct {
+	SessionID  pgtype.UUID        `json:"session_id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	TokenHash  string             `json:"token_hash"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type DeferredIntent struct {
 	IntentID    pgtype.UUID        `json:"intent_id"`
 	TaskID      pgtype.UUID        `json:"task_id"`
@@ -276,6 +286,15 @@ type TaskRunEvent struct {
 	Version       int64              `json:"version"`
 	Metadata      []byte             `json:"metadata"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type User struct {
+	UserID            pgtype.UUID        `json:"user_id"`
+	Username          string             `json:"username"`
+	PasswordHash      string             `json:"password_hash"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	PasswordChangedAt pgtype.Timestamptz `json:"password_changed_at"`
 }
 
 type VerificationRun struct {

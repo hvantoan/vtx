@@ -60,11 +60,11 @@ paths:
     get:
       summary: SSE stream — adds run_id filter, Last-Event-ID resume, credential_in_query
         guard
-      description: Accepts the legacy dashboard bearer token or a registry operator/policy
+      description: Accepts the operator's app session cookie or a policy registry
         token, using the same read permissions as the operator console. Scheduler,
         orchestrator, and gateway credentials do not grant stream access.
       security:
-      - BearerAuth: []
+      - OperatorSession: []
       - RegistryBearer: []
       parameters:
       - name: run_id
@@ -108,6 +108,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkerStatusResponse'
+  /api/v1/auth/login:
+    post:
+      summary: Operator login — sets the HttpOnly session cookie
+      description: Exchanges the single seeded operator account's username/password
+        for an opaque session. Failures are rate limited per client address (5 per
+        15 minutes).
+      operationId: authLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthLoginRequest'
+      responses:
+        '200':
+          description: Authenticated. Set-Cookie carries vtx_session
+            (HttpOnly, Path=/, SameSite=Lax, Secure when the request is HTTPS).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '401':
+          description: invalid_credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: too_many_attempts; Retry-After reports the remaining window
+            in seconds (900 for a fresh window).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the current session and clear the cookie
+      operationId: authLogout
+      security:
+      - OperatorSession: []
+      responses:
+        '204':
+          description: Session revoked (or no session was presented)
+  /api/v1/auth/me:
+    get:
+      summary: Current session identity and expiry
+      operationId: authMe
+      security:
+      - OperatorSession: []
+      responses:
+        '200':
+          description: Session identity; a sliding session may have been extended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '401':
+          description: unauthorized (missing, revoked or expired session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/password:
+    post:
+      summary: Change the operator password and revoke every other session
+      operationId: authChangePassword
+      security:
+      - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Password changed; other sessions were revoked
+        '400':
+          description: weak_password (minimum 12 characters)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: unauthorized | invalid_credentials (wrong current password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/integrations/jira/webhooks:
     post:
       summary: Jira Webhook Intake
@@ -464,6 +554,7 @@ paths:
     get:
       summary: Dashboard histogram + admission + outbox + worker health summary
       security:
+      - OperatorSession: []
       - RegistryBearer: []
       responses:
         '200':
@@ -476,6 +567,7 @@ paths:
     get:
       summary: Cursor-paginated run list joined to task (issue_key), pr_url, commit_sha
       security:
+      - OperatorSession: []
       - RegistryBearer: []
       parameters:
       - name: state
@@ -530,6 +622,7 @@ paths:
       summary: RunDetailView aggregate — run + worktree + PR + gate verdict + last
         error
       security:
+      - OperatorSession: []
       - RegistryBearer: []
       parameters:
       - name: run_id
@@ -555,6 +648,7 @@ paths:
     get:
       summary: Per-event-type outbox lag counters
       security:
+      - OperatorSession: []
       - RegistryBearer: []
       responses:
         '200':
@@ -569,6 +663,7 @@ paths:
     get:
       summary: Dead-lettered outbox events
       security:
+      - OperatorSession: []
       - RegistryBearer: []
       parameters:
       - name: after
@@ -601,7 +696,7 @@ paths:
     post:
       summary: Redrive a dead-lettered event — operator only, audited
       security:
-      - RegistryBearer: []
+      - OperatorSession: []
       parameters:
       - name: outbox_id
         in: path
@@ -639,6 +734,7 @@ paths:
     get:
       summary: Worker heartbeats + computed up/down status, merged with Temporal workers
       security:
+      - OperatorSession: []
       - RegistryBearer: []
       responses:
         '200':
@@ -969,10 +1065,19 @@ components:
     RegistryBearer:
       type: http
       scheme: bearer
-      description: 'One of the four registry actor tokens. The actor (scheduler, orchestrator,
-        operator, policy) is derived from the token, never from the request body.
+      description: 'One of the three machine actor tokens (scheduler, orchestrator,
+        policy). The actor is derived from the token, never from the request body.
+        Human operator access uses an app session, not a bearer token.
 
         '
+    OperatorSession:
+      type: apiKey
+      in: cookie
+      name: vtx_session
+      description: Opaque HttpOnly session cookie issued by POST /api/v1/auth/login.
+        Sessions slide at most once per hour and are revoked on logout or password
+        change. Not a credential that automation should hold; machines use their
+        actor bearer token.
     QAAgentBearer:
       type: http
       scheme: bearer
@@ -1169,6 +1274,41 @@ components:
         message:
           type: string
           example: Invalid or missing authorization header
+    AuthLoginRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+    AuthSession:
+      type: object
+      required:
+      - username
+      - expires_at
+      properties:
+        username:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    ChangePasswordRequest:
+      type: object
+      required:
+      - current_password
+      - new_password
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+          minLength: 12
     JiraWebhookEnvelope:
       type: object
       description: Jira Cloud administrative webhook payload (jira:issue_updated)
