@@ -19,6 +19,7 @@ type VerificationStore interface {
 	BeginSuite(context.Context, VerifyCommand, VerificationRun) (VerificationRun, bool, error)
 	FinishSuite(context.Context, VerifyCommand, VerificationRun, bool) error
 	MarkSuperseded(context.Context, string, string) error
+	RepinCommit(context.Context, VerifyCommand, string) error
 }
 type VerificationRun struct {
 	ID, RunID, SHA, Suite, Command, Status string
@@ -37,6 +38,9 @@ type VerifyOutcome struct {
 	SHA, Verdict string
 	Failed       []string
 	Retryable    bool
+	// Repinned reports that HEAD had fast-forwarded past the pinned commit and
+	// became the run's new subject; evidence is bound to SHA, never the old pin.
+	Repinned bool
 }
 type LogSink interface {
 	WriteLog(context.Context, VerificationRun) (string, error)
@@ -44,11 +48,18 @@ type LogSink interface {
 type HeadReader interface {
 	HeadSHA(context.Context, string) (string, error)
 }
+
+// VerificationGit supplies the worktree state that binds evidence to a commit.
+type VerificationGit interface {
+	HeadReader
+	IsAncestor(ctx context.Context, path, ancestor, descendant string) (bool, error)
+	IsDirty(ctx context.Context, path string) (bool, error)
+}
 type VerificationConfig struct{ SuiteTimeout, StageTimeout, LeaseCheckInterval time.Duration }
 type VerificationService struct {
 	Store  VerificationStore
 	Runner execcmd.Runner
-	Git    HeadReader
+	Git    VerificationGit
 	Layout gitops.Layout
 	Sink   LogSink
 	Clock  Clock
@@ -100,13 +111,41 @@ func (s *VerificationService) VerifyRun(ctx context.Context, cmd VerifyCommand) 
 		return VerifyOutcome{}, err
 	}
 	out := VerifyOutcome{SHA: sha, Verdict: "passed", AllPassed: true}
+	// Evidence is bound to a commit. A dirty tree means the suites would test
+	// code that no commit contains, so the result could never back the gate.
+	if dirty, err := s.Git.IsDirty(ctx, path); err != nil {
+		return out, err
+	} else if dirty {
+		out.AllPassed = false
+		out.Verdict = "dirty_worktree"
+		return out, nil
+	}
 	if run.CommitSHA == nil || sha != *run.CommitSHA {
 		if err := s.Store.MarkSuperseded(ctx, cmd.RunID, sha); err != nil {
 			return out, err
 		}
-		out.AllPassed = false
-		out.Verdict = "stale_sha"
-		return out, nil
+		// A commit made after coding→verifying fast-forwards the branch. Follow
+		// it: QA and the gate must evaluate the commit that will ship, not a
+		// pinned ancestor. Rewritten history (reset, rebase) stays stale.
+		if run.CommitSHA != nil {
+			fastForward, err := s.Git.IsAncestor(ctx, path, *run.CommitSHA, sha)
+			if err != nil {
+				return out, err
+			}
+			if fastForward {
+				if err := s.Store.RepinCommit(ctx, cmd, sha); err != nil {
+					return out, err
+				}
+				// Old rows keep their attempt, so the new evidence needs the next one.
+				cmd.Attempt = 0
+				out.Repinned = true
+			}
+		}
+		if !out.Repinned {
+			out.AllPassed = false
+			out.Verdict = "stale_sha"
+			return out, nil
+		}
 	}
 	if cmd.Attempt == 0 {
 		cmd.Attempt, err = s.Store.NextVerificationAttempt(ctx, cmd.RunID)

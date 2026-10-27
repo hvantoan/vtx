@@ -97,17 +97,24 @@ func (g Git) run(ctx context.Context, dir string, args ...string) (string, error
 // crash-partial clone leaves a dir WITHOUT .git, which is removed and
 // recloned — a healthy cache is never rebuilt.
 func (g Git) EnsureRepoCache(ctx context.Context, layout Layout, repoURL string) (string, error) {
-	if err := os.MkdirAll(layout.RepoCacheRoot, 0o755); err != nil {
+	// Resolve the root before cloning: git runs with its own cwd, so a relative
+	// root would nest the destination (root/root/<key>) and every later
+	// worktree add would look in the wrong place.
+	root, err := filepath.Abs(layout.RepoCacheRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo cache root: %w", err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", fmt.Errorf("create repo cache root: %w", err)
 	}
 	key := repoCacheKey(repoURL)
-	unlock, err := lockRepoCache(ctx, layout.RepoCacheRoot, key)
+	unlock, err := lockRepoCache(ctx, root, key)
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
 
-	dir := filepath.Join(layout.RepoCacheRoot, key)
+	dir := filepath.Join(root, key)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		if _, err := g.run(ctx, dir, "fetch", "--all", "--prune"); err != nil {
 			return "", fmt.Errorf("fetch repo cache: %w", err)
@@ -119,7 +126,7 @@ func (g Git) EnsureRepoCache(ctx context.Context, layout Layout, repoURL string)
 	if err := os.RemoveAll(dir); err != nil {
 		return "", fmt.Errorf("clear stale cache dir: %w", err)
 	}
-	if _, err := g.run(ctx, layout.RepoCacheRoot, "clone", repoURL, dir); err != nil {
+	if _, err := g.run(ctx, root, "clone", repoURL, dir); err != nil {
 		return "", fmt.Errorf("clone repo: %w", err)
 	}
 	return dir, nil
@@ -186,6 +193,19 @@ func (g Git) AddWorktree(ctx context.Context, repoDir, path, branch, baseRef str
 // HeadSHA resolves the worktree's base commit for the audit record.
 func (g Git) HeadSHA(ctx context.Context, path string) (string, error) {
 	return g.run(ctx, path, "rev-parse", "HEAD")
+}
+
+// IsAncestor reports whether ancestor is reachable from descendant. Exit code 1
+// is the documented "no" answer; anything else is a real failure.
+func (g Git) IsAncestor(ctx context.Context, path, ancestor, descendant string) (bool, error) {
+	if _, err := g.run(ctx, path, "merge-base", "--is-ancestor", ancestor, descendant); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // IsDirty reports whether the worktree has ANY uncommitted state — tracked

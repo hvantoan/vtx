@@ -18,15 +18,6 @@ import type {
   WorkerStatusResponse,
 } from "../types/api";
 
-const DEFAULT_API_BASE_URL = "http://localhost:49080";
-const TOKEN_STORAGE_KEY = "vtx.operator_token";
-const OPERATOR_ID_STORAGE_KEY = "vtx.operator_id";
-
-export interface OperatorCredentials {
-  token: string;
-  operatorId: string;
-}
-
 export interface RunFilters {
   state?: string;
   issueKey?: string;
@@ -39,51 +30,20 @@ export interface EventStreamRequest {
   init: RequestInit;
 }
 
+export interface SessionUser {
+  username: string;
+  expires_at: string;
+}
+
+/** Fired when any same-origin request comes back 401 so the guard can redirect. */
+export const SESSION_EXPIRED_EVENT = "vtx:session-expired";
+
 function now(): number {
   return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
-export function getApiBaseUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_API_BASE_URL ??
-    process.env.NEXT_PUBLIC_API_URL ??
-    DEFAULT_API_BASE_URL
-  ).replace(/\/$/, "");
-}
-
-function readStorage(key: string): string {
-  if (typeof window === "undefined") return "";
-
-  try {
-    return window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function getOperatorCredentials(): OperatorCredentials {
-  return {
-    token: readStorage(TOKEN_STORAGE_KEY) || process.env.NEXT_PUBLIC_API_AUTH_TOKEN || "",
-    operatorId: readStorage(OPERATOR_ID_STORAGE_KEY),
-  };
-}
-
-export function saveOperatorCredentials(token: string, operatorId: string): void {
-  if (typeof window === "undefined") return;
-  const normalizedToken = token.trim();
-  const normalizedOperatorId = operatorId.trim();
-  window.sessionStorage.setItem(TOKEN_STORAGE_KEY, normalizedToken);
-  window.sessionStorage.setItem(OPERATOR_ID_STORAGE_KEY, normalizedOperatorId);
-  window.localStorage.setItem(TOKEN_STORAGE_KEY, normalizedToken);
-  window.localStorage.setItem(OPERATOR_ID_STORAGE_KEY, normalizedOperatorId);
-}
-
-export function clearOperatorCredentials(): void {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-  window.sessionStorage.removeItem(OPERATOR_ID_STORAGE_KEY);
-  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-  window.localStorage.removeItem(OPERATOR_ID_STORAGE_KEY);
+function notifySessionExpired(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
 
 function isErrorResponse(value: unknown): value is ErrorResponse {
@@ -110,44 +70,31 @@ async function parseError(response: Response): Promise<ErrorResponse> {
 async function requestJson<T>(
   path: string,
   options: RequestInit = {},
-  authenticated = false,
   acceptedStatuses: readonly number[] = [200],
 ): Promise<ApiResult<T>> {
   const startedAt = now();
-  const credentials = getOperatorCredentials();
-
-  if (authenticated && !credentials.token) {
-    return {
-      data: null,
-      error: {
-        error: "missing_operator_token",
-        message: "Configure an operator token in Settings or NEXT_PUBLIC_API_AUTH_TOKEN.",
-      },
-      latencyMs: 0,
-      status: null,
-    };
-  }
 
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
-  if (authenticated) headers.set("Authorization", `Bearer ${credentials.token}`);
-  if (authenticated && credentials.operatorId) {
-    headers.set("X-Operator-Id", credentials.operatorId);
-  }
 
   try {
-    const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    const response = await fetch(path, {
       ...options,
       headers,
       cache: "no-store",
+      credentials: "include",
     });
     const latencyMs = Math.round(now() - startedAt);
 
     if (!acceptedStatuses.includes(response.status)) {
+      const error = await parseError(response);
+      // 401 only means "session gone" when the API says so; a wrong current
+      // password on /auth/password also returns 401 but must not sign out.
+      if (response.status === 401 && error.error === "unauthorized") notifySessionExpired();
       return {
         data: null,
-        error: await parseError(response),
+        error,
         latencyMs,
         status: response.status,
       };
@@ -177,7 +124,7 @@ export function fetchHealth(): Promise<ApiResult<HealthResponse>> {
 }
 
 export function fetchReady(): Promise<ApiResult<ReadyResponse>> {
-  return requestJson<ReadyResponse>("/ready", {}, false, [200, 503]);
+  return requestJson<ReadyResponse>("/ready", {}, [200, 503]);
 }
 
 export function fetchSystemStatus(): Promise<ApiResult<SystemStatusResponse>> {
@@ -189,11 +136,11 @@ export function fetchWorkers(): Promise<ApiResult<WorkerStatusResponse>> {
 }
 
 export function fetchOperatorOverview(): Promise<ApiResult<OperatorOverview>> {
-  return requestJson<OperatorOverview>("/api/v1/operator/overview", {}, true);
+  return requestJson<OperatorOverview>("/api/v1/operator/overview");
 }
 
 export function fetchOperatorWorkers(): Promise<ApiResult<CursorPage<OperatorWorkerStatus>>> {
-  return requestJson<CursorPage<OperatorWorkerStatus>>("/api/v1/operator/workers", {}, true);
+  return requestJson<CursorPage<OperatorWorkerStatus>>("/api/v1/operator/workers");
 }
 
 export function listRuns(filters: RunFilters = {}): Promise<ApiResult<CursorPage<RunListItem>>> {
@@ -203,22 +150,20 @@ export function listRuns(filters: RunFilters = {}): Promise<ApiResult<CursorPage
   if (filters.cursor) query.set("cursor", filters.cursor);
   if (filters.limit !== undefined) query.set("limit", String(filters.limit));
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
-  return requestJson<CursorPage<RunListItem>>(`/api/v1/operator/runs${suffix}`, {}, true);
+  return requestJson<CursorPage<RunListItem>>(`/api/v1/operator/runs${suffix}`);
 }
 
 export function getRunDetail(runId: string): Promise<ApiResult<RunDetailView>> {
-  return requestJson<RunDetailView>(`/api/v1/operator/runs/${encodeURIComponent(runId)}`, {}, true);
+  return requestJson<RunDetailView>(`/api/v1/operator/runs/${encodeURIComponent(runId)}`);
 }
 
 export function getRegistryRun(runId: string): Promise<ApiResult<RegistryRun>> {
-  return requestJson<RegistryRun>(`/api/v1/registry/runs/${encodeURIComponent(runId)}`, {}, true);
+  return requestJson<RegistryRun>(`/api/v1/registry/runs/${encodeURIComponent(runId)}`);
 }
 
 export function listRunEvents(runId: string): Promise<ApiResult<CursorPage<RegistryRunEvent>>> {
   return requestJson<CursorPage<RegistryRunEvent>>(
     `/api/v1/registry/runs/${encodeURIComponent(runId)}/events?limit=200`,
-    {},
-    true,
   );
 }
 
@@ -238,23 +183,21 @@ export function postTransition(
         reason,
       }),
     },
-    true,
   );
 }
 
 export function fetchOutboxStats(): Promise<ApiResult<Record<string, OutboxTypeCounters>>> {
-  return requestJson<Record<string, OutboxTypeCounters>>("/api/v1/operator/outbox", {}, true);
+  return requestJson<Record<string, OutboxTypeCounters>>("/api/v1/operator/outbox");
 }
 
 export function listDlq(): Promise<ApiResult<CursorPage<DlqEvent>>> {
-  return requestJson<CursorPage<DlqEvent>>("/api/v1/operator/outbox/dlq?limit=50", {}, true);
+  return requestJson<CursorPage<DlqEvent>>("/api/v1/operator/outbox/dlq?limit=50");
 }
 
 export function redriveDlq(outboxId: string, reason: string): Promise<ApiResult<never>> {
   return requestJson<never>(
     `/api/v1/operator/outbox/dlq/${encodeURIComponent(outboxId)}/redrive`,
     { method: "POST", body: JSON.stringify({ reason }) },
-    true,
     [202],
   );
 }
@@ -263,26 +206,43 @@ export function syncPullRequest(runId: string): Promise<ApiResult<PullRequest>> 
   return requestJson<PullRequest>(
     `/api/v1/pull_requests/${encodeURIComponent(runId)}/sync`,
     { method: "POST" },
-    true,
   );
 }
 
-export function buildEventStreamRequest(runId?: string, lastEventId?: string): EventStreamRequest | null {
-  const { token } = getOperatorCredentials();
-  if (!token) return null;
-
-  const url = new URL(`${getApiBaseUrl()}/api/v1/events`);
-  if (runId) url.searchParams.set("run_id", runId);
-
-  const headers = new Headers({
-    Accept: "text/event-stream",
-    Authorization: `Bearer ${token}`,
+export function login(username: string, password: string): Promise<ApiResult<SessionUser>> {
+  return requestJson<SessionUser>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username: username.trim(), password }),
   });
+}
+
+export function fetchCurrentUser(): Promise<ApiResult<SessionUser>> {
+  return requestJson<SessionUser>("/api/v1/auth/me");
+}
+
+export function logoutSession(): Promise<ApiResult<null>> {
+  return requestJson<null>("/api/v1/auth/logout", { method: "POST" }, [204]);
+}
+
+export function changePassword(currentPassword: string, newPassword: string): Promise<ApiResult<null>> {
+  return requestJson<null>(
+    "/api/v1/auth/password",
+    { method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) },
+    [204],
+  );
+}
+
+export function buildEventStreamRequest(runId?: string, lastEventId?: string): EventStreamRequest {
+  const query = new URLSearchParams();
+  if (runId) query.set("run_id", runId);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+
+  const headers = new Headers({ Accept: "text/event-stream" });
   if (lastEventId) headers.set("Last-Event-ID", lastEventId);
 
   return {
-    url: url.toString(),
-    init: { method: "GET", headers, cache: "no-store" },
+    url: `/api/v1/events${suffix}`,
+    init: { method: "GET", headers, cache: "no-store", credentials: "include" },
   };
 }
 
@@ -290,19 +250,9 @@ export async function openEventStream(
   runId: string | undefined,
   lastEventId: string | undefined,
   signal: AbortSignal,
-): Promise<Response | null> {
+): Promise<Response> {
   const request = buildEventStreamRequest(runId, lastEventId);
-  if (!request) return null;
-
-  const configuredBase = new URL(getApiBaseUrl());
-  const streamUrl = new URL(request.url);
-  if (
-    streamUrl.origin !== configuredBase.origin ||
-    streamUrl.pathname !== "/api/v1/events" ||
-    !["http:", "https:"].includes(streamUrl.protocol)
-  ) {
-    throw new Error("Refusing event stream URL outside the configured API origin");
-  }
-
-  return fetch(streamUrl, { ...request.init, signal });
+  const response = await fetch(request.url, { ...request.init, signal });
+  if (response.status === 401) notifySessionExpired();
+  return response;
 }

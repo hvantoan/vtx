@@ -41,6 +41,10 @@ func (r Runner) HeadSHA(ctx context.Context, path string) (string, error) {
 	return r.Git.HeadSHA(ctx, path)
 }
 
+func (r Runner) IsAncestor(ctx context.Context, path, ancestor, descendant string) (bool, error) {
+	return r.Git.IsAncestor(ctx, path, ancestor, descendant)
+}
+
 func (r Runner) IsDirty(ctx context.Context, path string) (bool, error) {
 	return r.Git.IsDirty(ctx, path)
 }

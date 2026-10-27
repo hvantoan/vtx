@@ -175,7 +175,7 @@ jobs:
           infra/compose/nginx/gen_certs.sh
           cat > ci.env <<EOF
           PORT=49080
-          API_AUTH_TOKEN=ci-public-token
+          SESSION_COOKIE_SECURE=auto
           JIRA_BASE_URL=https://vtxsolution.atlassian.net
           JIRA_API_EMAIL=ci@example.com
           JIRA_API_TOKEN=ci-token
@@ -183,7 +183,6 @@ jobs:
           GATEWAY_INTERNAL_AUTH_TOKEN=ci-internal-gateway-token-0000000000000000
           REGISTRY_ACTOR_SCHEDULER_TOKEN=ci-registry-scheduler-token-000000000000000
           REGISTRY_ACTOR_ORCHESTRATOR_TOKEN=ci-registry-orchestrator-token-00000000000
-          REGISTRY_ACTOR_OPERATOR_TOKEN=ci-registry-operator-token-00000000000000000
           REGISTRY_ACTOR_POLICY_TOKEN=ci-registry-policy-token-0000000000000000000
           WEBHOOK_PATH_SECRET_PRIMARY=cisecretprimary00000000000000000000000000000000000
           WEBHOOK_PATH_SECRET_SECONDARY=

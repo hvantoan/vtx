@@ -3,6 +3,13 @@
 //
 //	worker                 — Temporal worker (needs TEMPORAL_HOST_PORT)
 //	worker registry        — registry outbox dispatcher (needs PostgreSQL only)
+//	worker scheduler       — admission/lease scheduler (needs PostgreSQL only)
+//	worker preparing       — preparing-stage polling fallback (PostgreSQL only)
+//	worker spine           — VTX-ORCH spine tool server for the Pi orchestrator
+//	                         extension (needs PostgreSQL only)
+//	worker orchestrate     — VTX-ORCH launcher: claims coding runs and spawns
+//	                         headless Pi orchestrators (PostgreSQL + spine socket)
+//	worker user set-password — create/reset the operator login (PostgreSQL only)
 //
 // The registry dispatcher deliberately shares the image but not the lifetime:
 // a Temporal outage must never stop registry intake, and the temporable worker
@@ -74,6 +81,18 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "registry" {
 		runRegistryDispatcher()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "spine" {
+		runSpine()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "orchestrate" {
+		runOrchestrator(len(os.Args) > 2 && os.Args[2] == "--once")
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "user" {
+		runUserCommand(os.Args[2:])
 		return
 	}
 	runTemporalWorker()

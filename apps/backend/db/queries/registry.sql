@@ -110,6 +110,30 @@ RETURNING run_id, task_id, intent_id, correlation_id, origin_event_id,
     commit_sha, branch, error_code, error_message, lease_owner, lease_epoch,
     lease_expires_at, created_at, updated_at, started_at, finished_at, pr_url, failure_class, retry_policy_version;
 
+-- name: RecordRunCommitSHA :execrows
+-- VTX-ORCH: no supervisor owns the Pi lifecycle, so the registry records the
+-- worktree HEAD as the run's subject commit inside the coding→verifying
+-- transition tx (FR-AGT-001: SHA captured by the system, never agent-reported).
+-- Only fills an empty slot in the coding state; an existing SHA is never
+-- rewritten here (SHA drift is the evidence guard's job to reject).
+UPDATE task_runs
+SET commit_sha = sqlc.arg(commit_sha)::text,
+    updated_at = CURRENT_TIMESTAMP
+WHERE run_id = sqlc.arg(run_id)::uuid
+  AND state = 'coding'
+  AND (commit_sha IS NULL OR commit_sha = '');
+
+-- name: RepinRunCommitSHA :execrows
+-- VTX-ORCH: a commit made after coding→verifying fast-forwards the branch. The
+-- verifier re-pins the subject to that HEAD (ancestry checked in Go, never
+-- agent-reported) so QA and the gate evaluate the commit that will ship.
+-- Rewritten history never reaches this query: the caller keeps it stale.
+UPDATE task_runs
+SET commit_sha = sqlc.arg(commit_sha)::text,
+    updated_at = CURRENT_TIMESTAMP
+WHERE run_id = sqlc.arg(run_id)::uuid
+  AND state = 'verifying';
+
 -- name: InsertTaskRunEvent :one
 -- I-05: the creation row is version 0 with previous_state = '' (a run is born,
 -- it does not come from a state).

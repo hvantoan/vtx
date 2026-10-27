@@ -13,8 +13,8 @@ flowchart LR
   OB -->|execution_intent.created.v1| RW[registry-worker<br/>dispatcher]
   RW -->|tx: task, run, audit, outbox| DB[(registry_tasks / task_runs<br/>task_run_events)]
   OB -->|task_run.*| PENDING[no consumer yet - VTX-5]
-  API -->|HTTP reads + transitions| CLI[internal callers]
-  CLI -->|actor token| DB
+  API -->|HTTP reads + transitions| CLI[internal callers / operator console]
+  CLI -->|machine token or session cookie| DB
 ```
 
 `registry-worker` runs `worker registry`: it opens PostgreSQL and never dials
@@ -165,8 +165,10 @@ in-flight events are reclaimed by a sibling automatically.
 
 ## 8. HTTP API
 
-Base path `/api/v1/registry`. The caller authenticates with **one of four actor
-tokens**; the token determines the actor, and the request body can never set it.
+Base path `/api/v1/registry`. A machine caller authenticates with **one of
+three actor tokens**; the token determines the actor, and the request body can
+never set it. A human operator signs in at `POST /api/v1/auth/login` and uses
+the resulting `vtx_session` cookie; the session maps to the `operator` actor.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -184,14 +186,21 @@ Nothing is written when a conflict is returned.
 path; the prod overlay publishes no backend port. Phase-1 callers are internal
 processes on the compose/k8s network (the VTX-5 scheduler later).
 
-### Actor tokens
+### Actor credentials
 
-`REGISTRY_ACTOR_SCHEDULER_TOKEN`, `REGISTRY_ACTOR_ORCHESTRATOR_TOKEN`,
-`REGISTRY_ACTOR_OPERATOR_TOKEN`, `REGISTRY_ACTOR_POLICY_TOKEN` — all four are
-required by `cmd/api` (`ValidateRegistry` fails closed), must differ from each
-other, and must differ from `API_AUTH_TOKEN` and `GATEWAY_INTERNAL_AUTH_TOKEN`.
-An operator token is the human principal (`actor_type=human`); the other three
-are `system`.
+`REGISTRY_ACTOR_SCHEDULER_TOKEN`, `REGISTRY_ACTOR_ORCHESTRATOR_TOKEN`, and
+`REGISTRY_ACTOR_POLICY_TOKEN` are required by `cmd/api` (`ValidateRegistry`
+fails closed), must differ from each other, and must differ from
+`GATEWAY_INTERNAL_AUTH_TOKEN`. These are `system` actors.
+
+The human operator no longer has a bearer token. Seed the single account with
+`make user-password` (or `worker user set-password`) and sign in through the
+console. Sessions are opaque 32-byte tokens stored as SHA-256 hashes in
+`auth_sessions`, expire after `SESSION_TTL` (default 30 days), and slide at
+most once per hour. A password change revokes every other session.
+
+The registry E2E harness logs in with the account it seeds, then sends the
+session cookie on the transition calls — the same path an operator uses.
 
 ## 9. Known Phase-1 limits
 
@@ -211,6 +220,7 @@ are `system`.
 TEST_DATABASE_URL=... make test-integration
 
 # E2E: 2 replicas, SIGKILL replay, DLQ + redrive, routing guard, backfill,
-# secret hygiene, metric queries
+# secret hygiene, metric queries. The harness seeds its own operator account
+# and logs in before the transition calls.
 ./infra/scripts/test-registry-outbox.sh | tee registry-evidence.log
 ```

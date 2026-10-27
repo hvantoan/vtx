@@ -130,6 +130,12 @@ func main() {
 	// VTX-3 registry API. Fail closed: no DB ⇒ no registry routes; missing
 	// actor tokens ⇒ startup error, never an unauthenticated surface.
 	if db != nil {
+		// App-hosted operator login. Sessions live in the same database; the
+		// single account is seeded/reset with `worker user set-password`.
+		server.WithAuth(application.NewAuthService(
+			persistence.NewPgAuthStore(db.Queries), application.SystemClock{},
+			cfg.SessionTTL, nil, logger,
+		))
 		if err := cfg.ValidateRegistry(); err != nil {
 			logger.Error("Invalid registry configuration", "error", err)
 			os.Exit(1)

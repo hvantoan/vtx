@@ -27,15 +27,15 @@ Scope boundary: the dashboard **reads** registry/worktree/PR data through typed 
 |---|---|---|
 | FR-UI-001 | Issue/run state, stage progress, worker health, dependency readiness — measured, not hardcoded | Read endpoints §4.3: `GET /operator/overview` (state histogram, deferred count, admission slots 0–3 from `task_runs`), `GET /operator/workers` (`worker_heartbeats` staleness = 3×beat), `/ready` extended with a real `outbox` dependency probe (lag measured via `OutboxLag`). Stage progress derived from `state` position in the §5 chain (§5.3). |
 | FR-UI-002 | Run timeline, event/audit history, commit SHA, CI/QA evidence, PR link, error disposition | `GET /operator/runs/{run_id}` aggregates: run (sha/branch/error fields), `task_run_events` timeline (existing registry events endpoint), worktree, `pull_requests` + `ci_status`, `gate_decisions.evidence`, last `error_code`/`error_message`. UI `RunDetailPage` §6.2. |
-| FR-UI-003 | Operator mutations need authenticated principal + authorization; audit actor/reason/correlation | Mutations = existing `transitions` endpoint (operator actor token, `actor_type=human` audit) + new `POST /operator/outbox/dlq/{id}/redrive` and `POST /pull_requests/{run_id}/sync`, all under `RegistryActorMiddleware` restricted to `operator` (+`policy` for sync). `X-Operator-Id` header carried into audit metadata; `operator_audit_log` table §3. |
-| FR-UI-004 | SSE/stream via Authorization header or session; never token in query string | Existing `GET /api/v1/events` keeps Bearer auth (§4.5). Server-side guard: request carrying `token`/`access_token`/`auth` query params is rejected 401 `credential_in_query`. `run_id` filter and `Last-Event-ID` are the only new query/header inputs — neither is a credential. |
+| FR-UI-003 | Operator mutations need authenticated principal + authorization; audit actor/reason/correlation | Mutations = existing `transitions` endpoint (human `operator` actor from an app session, `actor_type=human` audit) + new `POST /operator/outbox/dlq/{id}/redrive` and `POST /pull_requests/{run_id}/sync`, all under `actorMiddleware` restricted to `operator` (+`policy` for sync). The session username is written to `metadata.operator_id` / `operator_audit_log.operator_id`; `X-Operator-Id` is no longer accepted. |
+| FR-UI-004 | SSE/stream via Authorization header or session; never token in query string | Existing `GET /api/v1/events` accepts the `vtx_session` cookie or a machine policy token (§4.5). Server-side guard: request carrying `token`/`access_token`/`auth` query params is rejected 401 `credential_in_query`. `run_id` filter and `Last-Event-ID` are the only new query/header inputs — neither is a credential. |
 | §7 Registry API | Read task/run/history + authorized mutation, typed errors 401/403/404/409 | Dashboard consumes the existing `/api/v1/registry/*` surface for timeline/mutations; new `/api/v1/operator/*` surface reuses the same middleware and error envelope (`ErrorResponse`), same status semantics (§4.6). |
 | §7 Web | REST + authenticated SSE / fetch stream; no misleading health claims | Fetch-streaming SSE (not EventSource) is the contract; readiness tiles display the actual dependency statuses including `degraded`; stale data (>3×poll) is visually dimmed per design-guidelines §4.1 `stale` state. |
 | UC-06/UC-07 | Operator block/resume/cancel; view state/timeline/evidence/DLQ/outbox lag; redrive with audit | `OperatorActions` UI component → transitions endpoint; `OutboxPanel` → `GET /operator/outbox` + DLQ list + redrive (audited in `operator_audit_log`). |
 | NFR-OPS-001 | Dependency health real; outbox lag, retries, DLQ, active runs observable | `/ready` gains `dependencies.outbox` (`up`/`degraded`/`down` by lag threshold `READY_OUTBOX_LAG_WARN`, default 5m, env-configurable). `GET /operator/outbox` returns per-event-type pending/retrying/dead-lettered counts + oldest age. |
-| NFR-SEC-001 | Fail-closed APIs, secret redaction | No new unauthenticated route; operator surface is a separate middleware group from the dashboard token (mirroring the worktree group in `routes.go`); `operator_audit_log` stores actor names/ids, never tokens. |
-| NFR-PRIV-001 | Private-network dashboard option; secrets out of source | Operator token supplied via env (`REGISTRY_ACTOR_OPERATOR_TOKEN`, existing); the web app calls the API with a configured bearer — MVP pattern documented §8 D3; no secrets committed (Next.js only receives non-secret config values). |
-| NFR-AUD-001 | Traceable issue→intent→run→SHA→PR; no token/raw payload in logs | Run detail view joins exactly that chain: `registry_tasks` → `execution_intents`/`task_runs` → `commit_sha`/`branch` → `pull_requests`. `X-Operator-Id` is a display identifier, not a credential. |
+| NFR-SEC-001 | Fail-closed APIs, secret redaction | No new unauthenticated route; the operator surface is a separate middleware group from the machine-token groups (mirroring the worktree group in `routes.go`); `operator_audit_log` stores actor names/ids, never tokens or session hashes. |
+| NFR-PRIV-001 | Private-network dashboard option; secrets out of source | Single CLI-seeded operator account; the browser holds only an HttpOnly `vtx_session` cookie (never a bearer token in storage or a bundle), and the web app calls same-origin `/api/*` through the Next.js proxy. No secrets are committed. |
+| NFR-AUD-001 | Traceable issue→intent→run→SHA→PR; no token/raw payload in logs | Run detail view joins exactly that chain: `registry_tasks` → `execution_intents`/`task_runs` → `commit_sha`/`branch` → `pull_requests`. Audit identity is the session username, not a client-supplied header. |
 | NFR-CON-001 | 20+ concurrent writers, exactly one commits | Dashboard mutations go through `TransitionRun` (existing CAS); the UI always sends `expected_version` from the freshest `GET` and surfaces `stale_version` 409s as "refresh and retry" — it never retries mutations automatically (§6.4). |
 | E2E-03/06/07 | Crash recovery visibility; admission ≤3 visible; operator actions + DLQ redrive per policy + audit | Tests UI-10/11/13 (§7): heartbeats mark crashed worker `down`; overview counts `queued`/`deferred` against the 3-slot admission invariant read from live `task_runs`; redrive writes `operator_audit_log` + `delivery_redrives` row + `outbox.delivery_redriven.v1` + clears `dead_lettered_at`. |
 | OD-03 | Multi-consumer ACK semantics undecided | Dashboard SSE does **not** consume/ACK outbox events — read-only tailer §4.5 D1 sidesteps OD-03 entirely. |
@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_beat
 CREATE TABLE IF NOT EXISTS operator_audit_log (
     audit_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     actor TEXT NOT NULL,                   -- authenticated actor ('operator')
-    operator_id TEXT,                      -- X-Operator-Id subprincipal, nullable
+    operator_id TEXT,                      -- session username, nullable
     action TEXT NOT NULL,                  -- 'dlq.redrive' | 'pull_request.sync' | ...
     target_type TEXT NOT NULL,             -- 'outbox_event' | 'pull_request' | 'task_run'
     target_id TEXT NOT NULL,
@@ -160,13 +160,19 @@ type HeartbeatWriter interface { Beat(ctx, hb WorkerHeartbeat) error }
 
 Policy-actor read access keeps automation (retry orchestrator) able to observe without a second credential; **mutations are operator-only** — a scheduler/orchestrator token gets 403 `forbidden`, matching `domain.Evaluate`'s actor gating style.
 
-### 4.4 `X-Operator-Id` header
+### 4.4 Operator identity (session)
 
-Optional, ≤64 chars, sanitized like `reason` (whitespace-flattened). Middleware copies it to context; transition handler injects `metadata.operator_id` so `task_run_events.metadata` distinguishes which human used the shared operator token. For `operator_audit_log` it lands in `operator_id`. **Not a credential** — the bearer token still authenticates; this is display-level attribution pending a real IdP (§8 D4).
+The operator signs in at `POST /api/v1/auth/login`; the API sets an HttpOnly,
+SameSite=Lax `vtx_session` cookie and the middleware maps it to
+`domain.ActorOperator`. Audit identity is the account username, injected into
+`metadata.operator_id` and `operator_audit_log.operator_id`. The old
+`X-Operator-Id` header was removed with the operator bearer token: a
+client-supplied identity is not an authentication source. Real IdP/SSO remains
+a future decision (§8 D4).
 
 ### 4.5 SSE hardening + feed (FR-UI-004, OD-03)
 
-- **Auth:** `EventStreamAuthMiddleware` on `GET /api/v1/events` accepts the console's operator/policy tokens with the same read allowlist as operator endpoints, while retaining the legacy dashboard bearer token. Scheduler/orchestrator actors receive 403; gateway, unknown, or missing credentials receive 401. `RejectQueryCredentials`: presence of `token`, `access_token`, `auth`, or `api_key` query params ⇒ 401 `credential_in_query` — makes the "never in query string" rule a server-enforced contract, not a client convention.
+- **Auth:** the stream middleware on `GET /api/v1/events` accepts the operator session cookie or a machine policy token with the same read allowlist as operator endpoints. Scheduler/orchestrator tokens receive 403; legacy operator/gateway/unknown/missing credentials receive 401. `RejectQueryCredentials`: presence of `token`, `access_token`, `auth`, or `api_key` query params ⇒ 401 `credential_in_query` — makes the "never in query string" rule a server-enforced contract, not a client convention. The Next.js proxy streams the response unbuffered with `X-Accel-Buffering: no`.
 - **Feed source (DECIDED, avoids OD-03):** `sse_tailer.go` runs a read-only poll `SELECT outbox_id, event_type, payload, created_at FROM outbox_events WHERE event_type IN ('task_run.created.v1','task_run.state_changed.v1','task_run.intent_deferred.v1','pull_request.opened.v1') AND created_at > $cursor ORDER BY created_at` every `SSE_TAIL_INTERVAL` (default 2s). It **never claims or ACKs** — the outbox stays exclusively owned by its real consumers, so no event is stolen from VTX-5/VTX-12 consumers.
 - **Dedup/resume:** SSE `id:` field = `outbox_id`; browser `Last-Event-ID` (or `?last_event_id=`) resumes the cursor; reconnect replays from cursor, never fabricates. In-memory hub keeps no history beyond the current poll window — the DB is the buffer.
 - **Filter:** optional `?run_id=<uuid>` narrows the tail to one run (payload `run_id` match server-side).
@@ -237,7 +243,7 @@ Pure function of `task_run_events` + current `state` — nothing stored, so it c
 
 ### 6.3 `lib/api.ts` additions
 
-Typed fetchers (`fetchOperatorOverview`, `listRuns`, `getRunDetail`, `fetchOutboxStats`, `listDlq`, `redriveDlq`, `postTransition`) mirroring the existing style — `cache: "no-store"`, typed error returns `{data, error, latencyMs}`, **never `any`**. Token resolution order (§8 D3): `sessionStorage['vtx.operator_token']` (set via a `/settings` token field) → `NEXT_PUBLIC_API_AUTH_TOKEN` read-only fallback. Mutation calls add `X-Operator-Id` from `sessionStorage['vtx.operator_id']`.
+Typed fetchers (`fetchOperatorOverview`, `listRuns`, `getRunDetail`, `fetchOutboxStats`, `listDlq`, `redriveDlq`, `postTransition`) mirroring the existing style — `cache: "no-store"`, typed error returns `{data, error, latencyMs}`, **never `any`**. Credentials are ambient: every call uses a relative same-origin path with `credentials: "include"`; there is no token in storage, no `NEXT_PUBLIC_*` fallback, and no `X-Operator-Id`. A 401 whose code is `unauthorized` fires a session-expired event that sends the browser to `/login?next=…`.
 
 ### 6.4 Realtime wiring
 
@@ -267,7 +273,7 @@ Evidence band: **VTX-13** — "Operational dashboard, authenticated controls, re
 | UI-10 | Redrive: dead-lettered event ⇒ `applied`, `dead_lettered_at` cleared, `redrive_count++`, `operator_audit_log` row (actor/operator_id/reason/outcome/request_id) | pgx integ | UC-07, E2E-07 |
 | UI-11 | Redrive on non-dead-lettered id ⇒ 409 `not_dead_lettered`, audit `rejected` row | pgx integ | E2E-07 |
 | UI-12 | Run detail aggregate contains task/run/events/worktree/PR/verdict in one payload; missing PR ⇒ `pull_request: null` not error | HTTP integ | FR-UI-002 |
-| UI-13 | `X-Operator-Id` sanitized (≤64 chars, whitespace flattened) into audit metadata; absent ⇒ `operator_id: null` not error | HTTP integ | FR-UI-003, NFR-AUD-001 |
+| UI-13 | Session username sanitized into audit metadata; a client-supplied `X-Operator-Id` is ignored; absent session ⇒ 401 | HTTP integ | FR-UI-003, NFR-AUD-001 |
 | UI-14 | FE unit: `RunStateBadge` covers all 12 states → label+variant; `StageProgressBar` mapping for each state incl. blocked/retry_wait overlay | vitest | FR-UI-001 |
 | UI-15 | FE: mutation dialog requires reason; 409 shows refresh path; no auto-retry of mutation | vitest + RTL | FR-UI-003, NFR-CON-001 |
 | UI-16 | FE: SSE client never appends credentials to URL (regression guard); reconnect sends `Last-Event-ID` | vitest | FR-UI-004 |
@@ -282,12 +288,12 @@ Evidence band: **VTX-13** — "Operational dashboard, authenticated controls, re
 |---|---|---|---|
 | D1 | SSE feed via read-only outbox tailer (no claim/ACK) | **DECIDED** | Sidesteps unresolved OD-03 multi-consumer ACK; DB is the durable buffer; `Last-Event-ID`/`outbox_id` cursor gives lossless resume without per-consumer receipt design. |
 | D2 | Operator mutations reuse the existing `transitions` endpoint | **DECIDED** | The state machine already enforces actor gating (403 for non-operator) and writes the audit row — duplicating it in a dashboard mutation API would fork audit truth (FR-UI-003, FR-REG-005). |
-| D3 | MVP credential delivery: operator token in `sessionStorage` (entered via settings UI), `NEXT_PUBLIC_*` env as read-only fallback on private network | **DECIDED (MVP) + STAKEHOLDER (hardening)** | Keeps token out of query string/source (FR-UI-004, NFR-PRIV-001) without a BFF. Before any non-private deployment: move mutations behind a Next.js route-handler session or real IdP — owner: Platform Administrator (OD-06). |
-| D4 | `X-Operator-Id` free-text subprincipal (no IdP yet) | **DECIDED (MVP)** | `task_run_events.actor` stays `operator`; `metadata.operator_id` + `operator_audit_log.operator_id` carry the human identity. STAKEHOLDER follow-up: SSO/IdP-backed principal — owner: Platform Administrator + Tech Lead. |
+| D3 | Operator credentials | **DECIDED — superseded MVP token storage** | One CLI-seeded account (`make user-password`), argon2id, server-side sessions in `auth_sessions`, HttpOnly SameSite=Lax cookie, 30-day sliding expiry, 5/15min login limit. The browser never receives a bearer token. A real IdP remains a future option. |
+| D4 | Human identity in audit | **DECIDED** | The session username is the identity (`metadata.operator_id`, `operator_audit_log.operator_id`). `X-Operator-Id` was removed. STAKEHOLDER follow-up: SSO/IdP-backed principal — owner: Platform Administrator + Tech Lead. |
 | D5 | Worker liveness via `worker_heartbeats` upsert (3×beat staleness) | **DECIDED** | Honest measurement (FR-UI-001): every loop that can hold a lease already has an identity to beat as; staleness computed at read, never stored. |
 | D6 | `/ready` adds `dependencies.outbox` (lag threshold `READY_OUTBOX_LAG_WARN=5m`) | **DECIDED** | Extends the existing contract additively; threshold is env-configurable pending OD-06 SLO numbers — the *value* is a placeholder, the *mechanism* is decided. |
 | D7 | Policy actor may read `/operator/*`, never mutate | **DECIDED** | Lets retry orchestration observe DLQ/overview without an operator credential; mutation routes check `actor == operator` explicitly. |
 | D8 | Run list cursor on `(updated_at, run_id)` descending | **DECIDED** | Matches operator usage ("what moved lately"); stable under concurrent updates unlike `created_at`-only cursors (same reasoning as version-cursor on events). |
 | D9 | Page cap 200 items (`OPERATOR_PAGE_MAX`) | **DECIDED** | Consistent with registry `maxPageLimit=200` already in `handlers_registry.go`. |
-| D10 | Whether `/operator/*` also serves machine actors via a fifth "dashboard" token | **STAKEHOLDER** | Only needed if an external monitoring system must read this surface; today operator+policy coverage suffices. Owner: Tech Lead. |
+| D10 | Whether `/operator/*` also serves machine actors via a fifth "dashboard" token | **DECIDED — no fifth token** | Humans use the operator session; policy remains the automation reader. A new machine reader would get its own actor only if a concrete consumer appears. Owner: Tech Lead. |
 | D11 | `stage_not_operational`-style honesty for CI evidence: dashboard shows `ci_status` verbatim; "unknown" renders `UNKNOWN` badge | **DECIDED** | Mirrors OD-05 posture — no inferred health claims (§7 Web interface rule). |

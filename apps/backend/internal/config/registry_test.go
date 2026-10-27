@@ -8,17 +8,16 @@ import (
 	"github.com/vtx/platform/internal/domain"
 )
 
-// TestValidateRegistryFailsClosed: D5 — every actor needs its own token, and no
-// actor token may reuse the dashboard or gateway token.
+// TestValidateRegistryFailsClosed: D5 — every machine actor needs its own
+// token, and no actor token may reuse the gateway token. The operator is not a
+// machine actor and has no token to validate.
 func TestValidateRegistryFailsClosed(t *testing.T) {
 	base := func() *config.Config {
 		return &config.Config{
-			AuthToken:                "public",
 			GatewayInternalAuthToken: "gateway",
 			RegistryActorTokens: map[domain.Actor]string{
 				domain.ActorScheduler:    "tok-s",
 				domain.ActorOrchestrator: "tok-o",
-				domain.ActorOperator:     "tok-h",
 				domain.ActorPolicy:       "tok-p",
 			},
 		}
@@ -36,7 +35,6 @@ func TestValidateRegistryFailsClosed(t *testing.T) {
 		{"missing scheduler", func(c *config.Config) { c.RegistryActorTokens[domain.ActorScheduler] = "" }, "REGISTRY_ACTOR_SCHEDULER_TOKEN"},
 		{"missing policy", func(c *config.Config) { delete(c.RegistryActorTokens, domain.ActorPolicy) }, "REGISTRY_ACTOR_POLICY_TOKEN"},
 		{"duplicate tokens", func(c *config.Config) { c.RegistryActorTokens[domain.ActorPolicy] = "tok-s" }, "must differ"},
-		{"reuses dashboard token", func(c *config.Config) { c.RegistryActorTokens[domain.ActorOperator] = "public" }, "API_AUTH_TOKEN"},
 		{"reuses gateway token", func(c *config.Config) { c.RegistryActorTokens[domain.ActorOrchestrator] = "gateway" }, "GATEWAY_INTERNAL_AUTH_TOKEN"},
 	}
 	for _, tc := range cases {

@@ -150,6 +150,40 @@ func (s *PgVerificationStore) MarkSuperseded(ctx context.Context, runID, sha str
 	return err
 }
 
+// RepinCommit moves the subject SHA to a fast-forward HEAD. It takes the same
+// row lock and lease fence as BeginSuite so a lease lost between the HEAD read
+// and the write cannot move the subject.
+func (s *PgVerificationStore) RepinCommit(ctx context.Context, cmd application.VerifyCommand, sha string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	id, err := uuidFromString(cmd.RunID)
+	if err != nil {
+		return err
+	}
+	run, err := q.GetTaskRunForUpdate(ctx, id)
+	if err != nil {
+		return fmt.Errorf("repin run: %w", err)
+	}
+	if err := application.CheckRunLease(snapshotFromTaskRun(run), cmd.LeaseOwner, cmd.LeaseEpoch, time.Now()); err != nil {
+		return err
+	}
+	if run.State != "verifying" {
+		return domain.ErrInvalidTransition
+	}
+	n, err := q.RepinRunCommitSHA(ctx, db.RepinRunCommitSHAParams{RunID: id, CommitSha: sha})
+	if err != nil {
+		return fmt.Errorf("repin commit: %w", err)
+	}
+	if n != 1 {
+		return domain.ErrEvidenceInvalid
+	}
+	return tx.Commit(ctx)
+}
+
 // FileLogSink stores bounded logs outside the run tree, under canonical roots.
 type FileLogSink struct{ Root string }
 

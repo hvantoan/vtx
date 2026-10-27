@@ -30,7 +30,6 @@ import (
 var integrationTokens = map[domain.Actor]string{
 	domain.ActorScheduler:    "it-scheduler-token",
 	domain.ActorOrchestrator: "it-orchestrator-token",
-	domain.ActorOperator:     "it-operator-token",
 	domain.ActorPolicy:       "it-policy-token",
 }
 
@@ -54,7 +53,6 @@ func TestRegistryAPIAgainstPostgres(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	cfg := &config.Config{
-		AuthToken:                "it-dashboard-token",
 		GatewayInternalAuthToken: "it-gateway-token",
 		RegistryActorTokens:      integrationTokens,
 	}
@@ -132,16 +130,17 @@ func TestRegistryAPIAgainstPostgres(t *testing.T) {
 		t.Fatalf("scheduler cancel = %d, want 403", rec.Code)
 	}
 
-	// The operator token performs a real mutation.
-	rec := do(http.MethodPost, "/api/v1/registry/runs/"+runID+"/transitions", integrationTokens[domain.ActorOperator],
+	// A policy token performs a real mutation (the operator actor now
+	// authenticates through an app session; covered by the auth tests).
+	rec := do(http.MethodPost, "/api/v1/registry/runs/"+runID+"/transitions", integrationTokens[domain.ActorPolicy],
 		map[string]any{"expected_version": 0, "action": "cancel", "reason": "integration",
 			"metadata": map[string]any{"source": "integration"}})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("operator cancel = %d, want 200 (body %s)", rec.Code, rec.Body)
+		t.Fatalf("cancel = %d, want 200 (body %s)", rec.Code, rec.Body)
 	}
 
 	// Reading the audit trail is authenticated and version-ordered.
-	rec = do(http.MethodGet, "/api/v1/registry/runs/"+runID+"/events?limit=10", integrationTokens[domain.ActorOperator], nil)
+	rec = do(http.MethodGet, "/api/v1/registry/runs/"+runID+"/events?limit=10", integrationTokens[domain.ActorPolicy], nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("events = %d, want 200 (body %s)", rec.Code, rec.Body)
 	}
@@ -158,7 +157,7 @@ func TestRegistryAPIAgainstPostgres(t *testing.T) {
 	}
 
 	// Cursor pagination returns only rows after the cursor.
-	rec = do(http.MethodGet, "/api/v1/registry/runs/"+runID+"/events?after_version=0", integrationTokens[domain.ActorOperator], nil)
+	rec = do(http.MethodGet, "/api/v1/registry/runs/"+runID+"/events?after_version=0", integrationTokens[domain.ActorPolicy], nil)
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode paged events: %v", err)
 	}
@@ -168,7 +167,7 @@ func TestRegistryAPIAgainstPostgres(t *testing.T) {
 
 	// The task read resolves by immutable Jira identity.
 	rec = do(http.MethodGet, "/api/v1/registry/tasks/vtxsolution.atlassian.net/"+issueID,
-		integrationTokens[domain.ActorOperator], nil)
+		integrationTokens[domain.ActorPolicy], nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get task = %d, want 200 (body %s)", rec.Code, rec.Body)
 	}

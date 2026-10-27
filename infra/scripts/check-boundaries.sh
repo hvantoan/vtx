@@ -12,20 +12,24 @@ ERRORS=0
 
 echo "🔍 Running VTX Monorepo Boundary Checks..."
 
+# var/ is runtime scratch (ignored by git): run worktrees and repo caches hold
+# their own module copies and must not be mistaken for repository structure.
+SKIP_RUNTIME=(-not -path "*/.git/*" -not -path "./var/*")
+
 # 1. Verify NO go.work or go.work.sum anywhere in repo (BS-19, AC-1)
-if find . -name "go.work*" -not -path "*/.git/*" | grep -q .; then
+if find . -name "go.work*" "${SKIP_RUNTIME[@]}" | grep -q .; then
     echo "❌ VIOLATION: Found forbidden 'go.work' file(s):"
-    find . -name "go.work*" -not -path "*/.git/*"
+    find . -name "go.work*" "${SKIP_RUNTIME[@]}"
     ERRORS=$((ERRORS + 1))
 else
     echo "  ✅ Check 1: No go.work files exist in repository."
 fi
 
 # 2. Verify EXACTLY ONE go.mod at apps/backend/go.mod (AC-1)
-GO_MOD_COUNT=$(find . -name "go.mod" -not -path "*/.git/*" | wc -l)
+GO_MOD_COUNT=$(find . -name "go.mod" "${SKIP_RUNTIME[@]}" | wc -l)
 if [ "$GO_MOD_COUNT" -ne 1 ]; then
     echo "❌ VIOLATION: Expected exactly 1 go.mod, found $GO_MOD_COUNT:"
-    find . -name "go.mod" -not -path "*/.git/*"
+    find . -name "go.mod" "${SKIP_RUNTIME[@]}"
     ERRORS=$((ERRORS + 1))
 else
     if [ ! -f "apps/backend/go.mod" ]; then

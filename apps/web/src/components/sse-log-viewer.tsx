@@ -74,7 +74,7 @@ export function SseLogViewer({ runId, onRunInvalidated }: SseLogViewerProps) {
       activeController = new AbortController();
       try {
         const response = await openEventStream(runId, lastEventId, activeController.signal);
-        if (!response) {
+        if (response.status === 401) {
           setConnection("disconnected");
           return;
         }

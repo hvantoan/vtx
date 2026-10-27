@@ -51,7 +51,7 @@ export PORT="$VTX_API_PORT"
 export DATABASE_URL="postgres://vtx_user:vtx_password@localhost:${VTX_POSTGRES_PORT}/vtx_platform?sslmode=disable"
 export TEMPORAL_HOST_PORT="localhost:${VTX_TEMPORAL_PORT}"
 export TEMPORAL_TASK_QUEUE="vtx-task-queue-${WORKTREE_NAME}"   # compose backend cũng đọc biến này
-export NEXT_PUBLIC_API_URL="http://localhost:${VTX_API_PORT}"
+export INTERNAL_API_URL="http://localhost:${VTX_API_PORT}"
 ```
 
 ### B. `worktree-env` — tool chuyên dụng cho per-worktree isolation

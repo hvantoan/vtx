@@ -51,10 +51,17 @@ next-env.d.ts
 infra/storage/data/
 .temporal/
 
+# Agent-master runtime state (Jira poll cursor + queue)
+/var/
+
 # Test & coverage artifacts
 test-results/
 playwright-report/
 blob-report/
-.pi/
+# Pi runtime state stays local, but the VTX orchestrator's specialist agents and
+# workflow prompts are repo-controlled and reviewed (VTX-ORCH design §7).
+.pi/*
+!.pi/agents/
+!.pi/prompts/
 __pycache__/
 *.pyc

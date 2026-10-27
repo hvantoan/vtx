@@ -59,6 +59,28 @@ func (s *PgWorktreeStore) AllocateWorktree(
 	}
 
 	if existing, err := qtx.GetWorktreeByRun(ctx, runID); err == nil {
+		owner := textValue(locked.LeaseOwner)
+		leaseLive := owner != "" && locked.LeaseExpiresAt.Valid && locked.LeaseExpiresAt.Time.After(time.Now())
+		if !leaseLive {
+			// Operator resume returns the run to preparing after the block path
+			// released its lease. The worktree row is still the same allocation,
+			// so re-acquire (epoch bump) instead of short-circuiting: otherwise
+			// the next advance is fenced by a lease nobody holds.
+			lease, err := qtx.AcquireRunLease(ctx, db.AcquireRunLeaseParams{
+				RunID:          runID,
+				LeaseOwner:     textFromOptional(cmd.Owner),
+				LeaseExpiresAt: pgtype.Timestamptz{Time: cmd.LeaseExpiresAt.UTC(), Valid: true},
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return application.Allocation{}, fmt.Errorf("%w: run %s went terminal", application.ErrWorktreeRunTerminal, cmd.RunID)
+			}
+			if err != nil {
+				return application.Allocation{}, fmt.Errorf("reacquire run lease: %w", err)
+			}
+			locked.LeaseOwner = lease.LeaseOwner
+			locked.LeaseEpoch = lease.LeaseEpoch
+			locked.LeaseExpiresAt = lease.LeaseExpiresAt
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return application.Allocation{}, fmt.Errorf("commit idempotent read: %w", err)
 		}

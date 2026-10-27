@@ -22,6 +22,11 @@ const (
 // reconciler reclaim worktrees whose worker died.
 const DefaultLeaseTTL = 2 * time.Minute
 
+// DefaultLeaseOwner is the identity used when WORKTREE_OWNER is unset. The
+// spine lease renewer and the orchestrator launcher must share it, or the Pi
+// heartbeat renews under a different owner and loses the fence.
+const DefaultLeaseOwner = "worktree-service"
+
 // WorktreeService is the only worktree lifecycle authority (VTX-4). VTX-3
 // remains the run/state authority — this service acquires the run lease VTX-3
 // defined but never wrote.
@@ -38,7 +43,7 @@ type WorktreeService struct {
 // VTX-5 passes its scheduler owner so the run lease names the true holder.
 func NewWorktreeService(store WorktreeStore, git WorktreeGit, owner string, leaseTTL time.Duration, clock Clock, logger *slog.Logger) *WorktreeService {
 	if owner == "" {
-		owner = "worktree-service"
+		owner = DefaultLeaseOwner
 	}
 	if leaseTTL <= 0 {
 		leaseTTL = DefaultLeaseTTL

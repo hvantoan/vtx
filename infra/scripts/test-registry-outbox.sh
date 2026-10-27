@@ -22,6 +22,10 @@ COMPOSE=(docker compose --env-file "$ENV_FILE"
 PSQL=("${COMPOSE[@]}" exec -T postgres psql -U vtx_user -d vtx_platform -tAqc)
 WORKER=registry-worker
 SCALE_FILE=infra/compose/docker-compose.e2e-scale.yml
+# Human operator credentials for the throwaway E2E stack. The harness seeds
+# this account itself; the password is test-only and never used outside E2E.
+OPERATOR_USERNAME=operator
+OPERATOR_PASSWORD=vtx-e2e-operator-password
 
 PASS=0; FAIL=0; FAILED_CASES=()
 note() { echo "     note: $*"; }
@@ -72,6 +76,38 @@ wait_for_drain() { # <timeout_s> <event_type>
     sleep 1; waited=$((waited+1))
   done
   pending_events "$event_type"
+}
+
+# seed_operator creates/resets the single operator account through the same
+# CLI path used in production (`worker user set-password`).
+seed_operator() {
+  local attempt
+  for attempt in $(seq 10); do
+    "${COMPOSE[@]}" exec -T -e VTX_USER_PASSWORD="$OPERATOR_PASSWORD" backend \
+      /app/worker user set-password --username "$OPERATOR_USERNAME" >/dev/null 2>&1 \
+      && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# login_cookie <container-id> — logs in over HTTP and echoes "vtx_session=...".
+# Sessions live in PostgreSQL, so one login is valid on every replica.
+login_cookie() {
+  local ip attempt cookie
+  ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1" 2>/dev/null)
+  [ -n "$ip" ] || return 1
+  for attempt in $(seq 10); do
+    cookie=$(curl -sS -D - -o /dev/null -X POST "http://${ip}:49080/api/v1/auth/login" \
+      -H 'Content-Type: application/json' \
+      --data "{\"username\":\"${OPERATOR_USERNAME}\",\"password\":\"${OPERATOR_PASSWORD}\"}" \
+      2>/dev/null \
+      | awk 'BEGIN{IGNORECASE=1} /^set-cookie:/ {gsub(/\r/,""); print $2; exit}' \
+      | cut -d';' -f1)
+    [ -n "$cookie" ] && { printf '%s' "$cookie"; return 0; }
+    sleep 1
+  done
+  return 1
 }
 
 echo "=== VTX-3 registry outbox harness (run $RUN_ID) ===================="
@@ -225,9 +261,14 @@ TR07_RUN=$(q "SELECT r.run_id FROM task_runs r JOIN registry_tasks t ON t.id = r
 sleep 5
 mapfile -t TR07_NODES < <("${COMPOSE[@]}" -f "$SCALE_FILE" ps -q backend)
 TR07_NODES_N=${#TR07_NODES[@]}
+seed_operator || bad "TR-07" "could not seed the operator account"
+TR07_COOKIE=$(login_cookie "${TR07_NODES[0]}")
+if [ -z "$TR07_COOKIE" ]; then
+  bad "TR-07" "operator login failed against the first replica"
+fi
 send_transition() { # <container> <outfile>
   docker exec "$1" wget -q -S -O /dev/null \
-    --header="Authorization: Bearer ${REGISTRY_ACTOR_OPERATOR_TOKEN}" \
+    --header="Cookie: ${TR07_COOKIE}" \
     --header="Content-Type: application/json" \
     --post-data='{"expected_version":0,"action":"cancel","reason":"concurrency"}' \
     "http://127.0.0.1:49080/api/v1/registry/runs/${TR07_RUN}/transitions" \
@@ -258,7 +299,7 @@ echo "--- Secret hygiene ------------------------------------------------"
 "${COMPOSE[@]}" logs --no-color --since 15m "$WORKER" backend > /tmp/vtx_registry_logs.txt 2>&1 || true
 LEAK=0
 for val in "${REGISTRY_ACTOR_SCHEDULER_TOKEN:-}" "${REGISTRY_ACTOR_ORCHESTRATOR_TOKEN:-}" \
-           "${REGISTRY_ACTOR_OPERATOR_TOKEN:-}" "${REGISTRY_ACTOR_POLICY_TOKEN:-}"; do
+           "${REGISTRY_ACTOR_POLICY_TOKEN:-}"; do
   [ -n "$val" ] || continue
   if grep -qF "$val" /tmp/vtx_registry_logs.txt; then LEAK=1; echo "     LEAKED: $val"; fi
 done

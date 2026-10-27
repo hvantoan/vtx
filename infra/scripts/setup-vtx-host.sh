@@ -141,9 +141,9 @@ rand() { openssl rand -hex 32; }
 gen_env() {
   [ -f .env ] || { cp .env.example .env; log ".env created from .env.example"; }
   local key val
-  for key in API_AUTH_TOKEN GATEWAY_INTERNAL_AUTH_TOKEN WEBHOOK_PATH_SECRET_PRIMARY \
+  for key in GATEWAY_INTERNAL_AUTH_TOKEN WEBHOOK_PATH_SECRET_PRIMARY \
              REGISTRY_ACTOR_SCHEDULER_TOKEN REGISTRY_ACTOR_ORCHESTRATOR_TOKEN \
-             REGISTRY_ACTOR_OPERATOR_TOKEN REGISTRY_ACTOR_POLICY_TOKEN; do
+             REGISTRY_ACTOR_POLICY_TOKEN; do
     val="$(env_get "$key")"
     if [ -z "$val" ] || echo "$val" | grep -qE "^($KNOWN_PLACEHOLDERS)$"; then
       env_set "$key" "$(rand)"
@@ -165,9 +165,9 @@ gen_env() {
 
   # backend Validate() requires every secret distinct
   local dup
-  dup=$(for k in API_AUTH_TOKEN GATEWAY_INTERNAL_AUTH_TOKEN WEBHOOK_PATH_SECRET_PRIMARY \
+  dup=$(for k in GATEWAY_INTERNAL_AUTH_TOKEN WEBHOOK_PATH_SECRET_PRIMARY \
                  REGISTRY_ACTOR_SCHEDULER_TOKEN REGISTRY_ACTOR_ORCHESTRATOR_TOKEN \
-                 REGISTRY_ACTOR_OPERATOR_TOKEN REGISTRY_ACTOR_POLICY_TOKEN; do env_get "$k"; done \
+                 REGISTRY_ACTOR_POLICY_TOKEN; do env_get "$k"; done \
         | sort | uniq -d | head -1)
   [ -z "$dup" ] || die "duplicate secret value in .env — backend fails closed on colliding tokens"
   ok ".env secrets distinct"

@@ -19,7 +19,14 @@ type Querier interface {
 	// invalidates every previously observed epoch — that is the fencing token
 	// stale holders get rejected on.
 	AcquireRunLease(ctx context.Context, arg AcquireRunLeaseParams) (AcquireRunLeaseRow, error)
+	BeatOrchestratorRun(ctx context.Context, arg BeatOrchestratorRunParams) (int64, error)
 	ClaimDeferredForTask(ctx context.Context, taskID pgtype.UUID) (DeferredIntent, error)
+	// VTX-ORCH orchestration launcher claims. worker_heartbeats already models
+	// "one row per long-lived driver", so an orchestrator process claims one run by
+	// inserting a row keyed (run_id, 'agent_host'). The claim token in metadata
+	// makes beat/release conditional: a relauncher that took over after a stale
+	// window can never have its claim deleted by the crashed predecessor.
+	ClaimOrchestratorRun(ctx context.Context, arg ClaimOrchestratorRunParams) (string, error)
 	// VTX-3 outbox dispatcher queries (§0.E: exactly ONE consumer identity, N
 	// replicas — SKIP LOCKED spreads work, `claimed_by` never hides work from a
 	// sibling). `published_at` is the consumer-specific ACK: it is stamped by the
@@ -38,6 +45,7 @@ type Querier interface {
 	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
 	// the intended signal, not a stuck queue.
 	CountOutboxLag(ctx context.Context, eventType string) (CountOutboxLagRow, error)
+	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (CreateAuthSessionRow, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateTaskEvent(ctx context.Context, arg CreateTaskEventParams) (TaskEvent, error)
 	// Retention: terminal noise receipts age out; accepted/duplicate rows and
@@ -54,6 +62,7 @@ type Querier interface {
 	GetDeferredIntentOrigin(ctx context.Context, intentID pgtype.UUID) (GetDeferredIntentOriginRow, error)
 	GetGateVerdict(ctx context.Context, arg GetGateVerdictParams) (GetGateVerdictRow, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
+	GetLiveAuthSession(ctx context.Context, tokenHash string) (GetLiveAuthSessionRow, error)
 	GetOperatorRunDetail(ctx context.Context, runID pgtype.UUID) (GetOperatorRunDetailRow, error)
 	GetOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (GetOutboxEventRow, error)
 	GetPRRunContext(ctx context.Context, runID pgtype.UUID) (GetPRRunContextRow, error)
@@ -79,6 +88,8 @@ type Querier interface {
 	// committer wins, every other writer blocks here, then reads the NEW version
 	// and is classified as stale_version.
 	GetTaskRunForUpdate(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
+	GetUserByID(ctx context.Context, userID pgtype.UUID) (GetUserByIDRow, error)
+	GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error)
 	GetVerificationRun(ctx context.Context, arg GetVerificationRunParams) (VerificationRun, error)
 	// The gate/QA lookup: "does a full suite set exist at THIS sha".
 	GetVerificationSuiteSetAtSHA(ctx context.Context, arg GetVerificationSuiteSetAtSHAParams) ([]VerificationRun, error)
@@ -197,15 +208,23 @@ type Querier interface {
 	// D8-7: next attempt is computed, not stored on task_runs.
 	MaxVerificationAttempt(ctx context.Context, runID pgtype.UUID) (int32, error)
 	OutboxStatsByType(ctx context.Context) ([]OutboxStatsByTypeRow, error)
+	PruneAuthSessions(ctx context.Context) (int64, error)
 	// Dead letter: unsupported event_type, schema-invalid payload or exhausted
 	// retries. The row is kept (audit) and excluded from claim until redrive.
 	QuarantineOutboxEvent(ctx context.Context, arg QuarantineOutboxEventParams) (int64, error)
+	// VTX-ORCH: no supervisor owns the Pi lifecycle, so the registry records the
+	// worktree HEAD as the run's subject commit inside the coding→verifying
+	// transition tx (FR-AGT-001: SHA captured by the system, never agent-reported).
+	// Only fills an empty slot in the coding state; an existing SHA is never
+	// rewritten here (SHA drift is the evidence guard's job to reject).
+	RecordRunCommitSHA(ctx context.Context, arg RecordRunCommitSHAParams) (int64, error)
 	RedriveDeadLetter(ctx context.Context, outboxID pgtype.UUID) (int64, error)
 	// Audited redrive step 1: clear the DLQ marker so the dispatcher re-claims
 	// the event. Guarded on dead_lettered_at — a second redrive is a 0-row no-op.
 	RedriveDeadLetteredEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
 	// Operator action: clear the DLQ marker and let the dispatcher try again.
 	RedriveOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
+	ReleaseOrchestratorRun(ctx context.Context, arg ReleaseOrchestratorRunParams) (int64, error)
 	// Idempotent release: owner+epoch match required, so a stale owner can never
 	// clear a fresher lease.
 	ReleaseRunLease(ctx context.Context, arg ReleaseRunLeaseParams) error
@@ -213,6 +232,14 @@ type Querier interface {
 	// while the run is live — a terminal run's lease must never be extended.
 	// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
 	RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error)
+	// VTX-ORCH: a commit made after coding→verifying fast-forwards the branch. The
+	// verifier re-pins the subject to that HEAD (ancestry checked in Go, never
+	// agent-reported) so QA and the gate evaluate the commit that will ship.
+	// Rewritten history never reaches this query: the caller keeps it stale.
+	RepinRunCommitSHA(ctx context.Context, arg RepinRunCommitSHAParams) (int64, error)
+	RevokeAllUserSessions(ctx context.Context, userID pgtype.UUID) (int64, error)
+	RevokeAuthSession(ctx context.Context, sessionID pgtype.UUID) (int64, error)
+	RevokeUserSessionsExcept(ctx context.Context, arg RevokeUserSessionsExceptParams) (int64, error)
 	// VTX-13 operator dashboard reads and audited DLQ mutation.
 	RunStateHistogram(ctx context.Context) ([]RunStateHistogramRow, error)
 	// Bounded retry: bump attempt, back off, release the claim so a sibling
@@ -226,6 +253,7 @@ type Querier interface {
 	SetRunBranch(ctx context.Context, arg SetRunBranchParams) error
 	SetRunPrURL(ctx context.Context, arg SetRunPrURLParams) error
 	SetSchedulerRunError(ctx context.Context, arg SetSchedulerRunErrorParams) error
+	TouchAuthSession(ctx context.Context, arg TouchAuthSessionParams) (int64, error)
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.
 	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
 	UpdatePullRequestSync(ctx context.Context, arg UpdatePullRequestSyncParams) (PullRequest, error)
@@ -233,6 +261,7 @@ type Querier interface {
 	// is the second line of defence (0 rows ⇒ caller treats it as stale_version).
 	UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunStateParams) (TaskRun, error)
 	UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusParams) error
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
 	// VTX-3 registry queries. Every mutation runs inside the single pgx.Tx opened
 	// by the application service (queries.WithTx), so claim → transition → audit →
 	// outbound event either all commit or none do (TR-17/TR-25).
@@ -242,6 +271,9 @@ type Querier interface {
 	// not erase one a previous delivery recorded.
 	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error)
 	UpsertRunRequirement(ctx context.Context, arg UpsertRunRequirementParams) (RunRequirement, error)
+	// App-hosted operator authentication. Sessions are looked up by the SHA-256 of
+	// the cookie value; the raw token never reaches the database.
+	UpsertUserPassword(ctx context.Context, arg UpsertUserPasswordParams) (UpsertUserPasswordRow, error)
 	UpsertWorkerHeartbeat(ctx context.Context, arg UpsertWorkerHeartbeatParams) (string, error)
 	UpsertWorkerHeartbeatOp(ctx context.Context, arg UpsertWorkerHeartbeatOpParams) error
 }

@@ -192,6 +192,46 @@ func TestWorktreeAllocate_IdempotentRetry(t *testing.T) {
 	}
 }
 
+func TestWorktreeAllocate_ReacquiresLeaseAfterResume(t *testing.T) {
+	h := newWorktreeHarness(t)
+	_, runID := h.seedTaskAndRun("preparing")
+	first, err := h.svc.AllocateWorktree(context.Background(), application.AllocateCommand{RunID: runID})
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	// The block path releases the lease; an operator resume then sends the run
+	// back to preparing with the same worktree row.
+	if _, err := h.pool.Exec(context.Background(),
+		`UPDATE task_runs SET state = 'blocked', error_code = 'orchestrator_stalled',
+		 lease_owner = NULL, lease_expires_at = NULL WHERE run_id = $1`, runID); err != nil {
+		t.Fatalf("simulate block: %v", err)
+	}
+	if _, err := h.pool.Exec(context.Background(),
+		`UPDATE task_runs SET state = 'preparing' WHERE run_id = $1`, runID); err != nil {
+		t.Fatalf("simulate resume: %v", err)
+	}
+	second, err := h.svc.AllocateWorktree(context.Background(), application.AllocateCommand{RunID: runID})
+	if err != nil {
+		t.Fatalf("reallocate: %v", err)
+	}
+	if !second.Existing {
+		t.Fatal("reallocation must return the existing row")
+	}
+	if second.LeaseEpoch <= first.LeaseEpoch {
+		t.Fatalf("lease epoch = %d, want > %d (a resumed run must be re-fenced)", second.LeaseEpoch, first.LeaseEpoch)
+	}
+	var owner *string
+	var expires *time.Time
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT lease_owner, lease_expires_at FROM task_runs WHERE run_id = $1`, runID,
+	).Scan(&owner, &expires); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if owner == nil || *owner != "test-worker" || expires == nil || !expires.After(time.Now()) {
+		t.Fatalf("lease not re-acquired: owner=%v expires=%v", owner, expires)
+	}
+}
+
 func TestWorktree_OneActivePerTaskEnforced(t *testing.T) {
 	h := newWorktreeHarness(t)
 	taskID, runID := h.seedTaskAndRun("preparing")

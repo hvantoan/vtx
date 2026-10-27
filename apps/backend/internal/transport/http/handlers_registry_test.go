@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,7 +19,6 @@ import (
 var testActorTokens = map[domain.Actor]string{
 	domain.ActorScheduler:    "tok-scheduler",
 	domain.ActorOrchestrator: "tok-orchestrator",
-	domain.ActorOperator:     "tok-operator",
 	domain.ActorPolicy:       "tok-policy",
 }
 
@@ -70,21 +68,26 @@ func (f *fakeRegistry) ListEvents(_ context.Context, _ string, afterVersion *int
 
 func registryServer(t *testing.T, fake *fakeRegistry) http.Handler {
 	t.Helper()
-	cfg := &config.Config{AuthToken: "public-token", GatewayInternalAuthToken: "gw-token", RegistryActorTokens: testActorTokens}
-	server := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	cfg := &config.Config{GatewayInternalAuthToken: "gw-token", RegistryActorTokens: testActorTokens}
+	server := NewServer(cfg, discardLogger(), nil, nil)
 	server.WithRegistry(fake, fake)
+	server.WithAuth(newFakeAuthService())
 	return server.Routes()
 }
 
-func doRegistry(t *testing.T, handler http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
+func doRegistry(t *testing.T, handler http.Handler, method, path, credential, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, reader)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	switch credential {
+	case "":
+	case testOperatorSession:
+		withTestSession(req)
+	default:
+		req.Header.Set("Authorization", "Bearer "+credential)
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -100,7 +103,8 @@ func TestRegistryAuthRejectsMissingAndUnknownTokens(t *testing.T) {
 	for _, tc := range []struct{ name, token string }{
 		{"missing", ""},
 		{"unknown", "not-a-configured-token"},
-		{"dashboard token", "public-token"},
+		{"legacy dashboard token", "public-token"},
+		{"removed operator token", "tok-operator"},
 		{"gateway token", "gw-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +127,7 @@ func TestRegistryAuthRejectsMissingAndUnknownTokens(t *testing.T) {
 func TestRegistryActorComesFromTheToken(t *testing.T) {
 	fake := &fakeRegistry{run: application.RunSnapshot{RunID: "run-1", State: domain.StateCancelled, Version: 1}}
 	rec := doRegistry(t, registryServer(t, fake), http.MethodPost,
-		"/api/v1/registry/runs/run-1/transitions", "tok-operator",
+		"/api/v1/registry/runs/run-1/transitions", testOperatorSession,
 		`{"expected_version":0,"action":"cancel","reason":"stop"}`)
 
 	if rec.Code != http.StatusOK {
@@ -145,7 +149,7 @@ func TestRegistryActorComesFromTheToken(t *testing.T) {
 func TestRegistryBodyActorCannotImpersonate(t *testing.T) {
 	fake := &fakeRegistry{}
 	rec := doRegistry(t, registryServer(t, fake), http.MethodPost,
-		"/api/v1/registry/runs/run-1/transitions", "tok-operator",
+		"/api/v1/registry/runs/run-1/transitions", testOperatorSession,
 		`{"expected_version":0,"action":"cancel","actor":"policy"}`)
 
 	if rec.Code != http.StatusForbidden {
@@ -205,7 +209,7 @@ func TestRegistryRejectsUnknownActionAndBadBody(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeRegistry{}
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/registry/runs/run-1/transitions", strings.NewReader(tc.body))
-			req.Header.Set("Authorization", "Bearer tok-operator")
+			withTestSession(req)
 			req.Header.Set("Content-Type", tc.contentType)
 			rec := httptest.NewRecorder()
 			registryServer(t, fake).ServeHTTP(rec, req)
@@ -233,7 +237,7 @@ func TestRegistryEventCursorUsesVersion(t *testing.T) {
 	}
 	fake := &fakeRegistry{events: events}
 	rec := doRegistry(t, registryServer(t, fake), http.MethodGet,
-		"/api/v1/registry/runs/run-1/events?after_version=0&limit=2", "tok-operator", "")
+		"/api/v1/registry/runs/run-1/events?after_version=0&limit=2", testOperatorSession, "")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
@@ -262,7 +266,7 @@ func TestRegistryEventCursorUsesVersion(t *testing.T) {
 	}{}
 	fake.events = events[:1]
 	rec = doRegistry(t, registryServer(t, fake), http.MethodGet,
-		"/api/v1/registry/runs/run-1/events?limit=2", "tok-operator", "")
+		"/api/v1/registry/runs/run-1/events?limit=2", testOperatorSession, "")
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -274,7 +278,7 @@ func TestRegistryEventCursorUsesVersion(t *testing.T) {
 // TestRegistryReadNotFound: a missing run/task is 404, not 500.
 func TestRegistryReadNotFound(t *testing.T) {
 	fake := &fakeRegistry{err: application.ErrReadNotFound}
-	rec := doRegistry(t, registryServer(t, fake), http.MethodGet, "/api/v1/registry/runs/nope", "tok-operator", "")
+	rec := doRegistry(t, registryServer(t, fake), http.MethodGet, "/api/v1/registry/runs/nope", testOperatorSession, "")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}

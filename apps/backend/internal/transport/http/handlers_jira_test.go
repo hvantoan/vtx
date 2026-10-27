@@ -71,7 +71,6 @@ func setupWebhookServer(t *testing.T, p transporthttp.JiraWebhookProcessor, recs
 	cfg := &config.Config{
 		Port:                     "49080",
 		Env:                      "test",
-		AuthToken:                testAPIToken,
 		GatewayInternalAuthToken: testGatewayToken,
 	}
 	srv := transporthttp.NewServer(cfg, observability.SetupLogger("error"), nil, nil)
@@ -113,11 +112,11 @@ func TestWebhookAuthSeparation(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 	})
 
-	t.Run("public API token rejected on webhook route -> 401", func(t *testing.T) {
+	t.Run("legacy public API token rejected on webhook route -> 401", func(t *testing.T) {
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, webhookReq(t, webhookPath, testAPIToken, "application/json", body))
 		assert.Equal(t, http.StatusUnauthorized, rr.Code,
-			"API_AUTH_TOKEN must NOT open the webhook route — token separation")
+			"the removed dashboard token must NOT open the webhook route")
 	})
 
 	t.Run("internal token accepted", func(t *testing.T) {

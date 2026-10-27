@@ -143,5 +143,39 @@ Jira Cloud ──HTTPS──▶ Nginx Gateway (:49443) ──internal HTTP──
 
 - **Layer 1 — URL path secret (Nginx).** Jira posts to `https://<host>/webhooks/<secret>/jira`. An envsubst-templated `map` compares the path segment against `WEBHOOK_PATH_SECRET_PRIMARY`/`_SECONDARY` (rotation overlap); mismatch → `403` before any proxying. `rewrite … break` strips the secret so it never reaches Go logs or upstream services.
 - **Layer 2 — injected internal token (Go).** The gateway unconditionally overwrites `Authorization` with `Bearer ${GATEWAY_INTERNAL_AUTH_TOKEN}` (client-supplied values are dropped, never forwarded). `GatewayAuthMiddleware` constant-time compares against `cfg.GatewayInternalAuthToken`.
-- **Token separation is mandatory.** `API_AUTH_TOKEN` ships to every browser bundle (`NEXT_PUBLIC_API_AUTH_TOKEN`), so the webhook route must never reuse it. `config.Validate()` fails startup if `GATEWAY_INTERNAL_AUTH_TOKEN` is empty or equals `API_AUTH_TOKEN`.
-- **Published port is retained.** `${VTX_API_PORT}:49080` stays published for the dashboard (browser SSE/REST calls `http://localhost:49080`). Webhook protection comes from layer 2, not from hiding the port.
+- **Token separation is mandatory.** The webhook route must never reuse a machine actor token. `config.Validate()` fails startup if `GATEWAY_INTERNAL_AUTH_TOKEN` is empty or equals any `REGISTRY_ACTOR_*` token.
+- **Published port is retained in dev.** `${VTX_API_PORT}:49080` stays published for direct API tests and the LAN proxy; the browser itself only talks to the Next.js origin. Webhook protection comes from layer 2, not from hiding the port.
+
+---
+
+## 5. Operator Authentication
+
+There is exactly one human role (`operator`) and one account, seeded or reset on
+the host:
+
+```bash
+make user-password          # prompts twice; writes an argon2id PHC hash
+```
+
+- **Credentials.** Username is normalized to lowercase; passwords use
+  argon2id (64 MiB, t=3, p=2) with a 12-character minimum. Unknown usernames
+  still pay for a dummy verification so timing does not enumerate accounts.
+- **Sessions.** `POST /api/v1/auth/login` returns an opaque 32-byte token in
+  an HttpOnly, SameSite=Lax `vtx_session` cookie (Secure when the request is
+  HTTPS, see `SESSION_COOKIE_SECURE`). Only a SHA-256 hash is stored in
+  `auth_sessions`. Sessions last `SESSION_TTL` (default 720h) and slide at
+  most once per hour.
+- **Rate limit.** Five failed attempts per client IP + username in a 15-minute
+  fixed window return `429 too_many_attempts` with `Retry-After: 900`. The
+  limiter is in-process, so each API replica enforces it independently.
+- **Lifecycle.** `POST /api/v1/auth/logout` is idempotent and clears the
+  cookie. `POST /api/v1/auth/password` requires the current password, revokes
+  every other session, and keeps the caller signed in.
+- **Authorization.** Sessions map to `domain.ActorOperator`; machine bearer
+  tokens (scheduler/orchestrator/policy) are unchanged. A legacy operator
+  bearer token is rejected with `401`, and `X-Operator-Id` is no longer read —
+  audit identity comes from the session username.
+- **Same-origin web proxy.** The dashboard calls relative `/api/*` paths. In
+  compose, Next.js proxies them to `INTERNAL_API_URL` (runtime env) and streams
+  SSE unbuffered; through the Cloudflare Tunnel, cloudflared routes `/api/*`
+  straight to the backend. Both paths share the cookie.
