@@ -23,12 +23,15 @@ const SECRET_PATTERNS: RegExp[] = [
 
 const MASK = "[REDACTED]";
 
-/** Redact secret shapes from a single string. */
-export function redactText(input: string): string {
+/** Redact secret shapes and caller-supplied values from a single string. */
+export function redactText(input: string, secretValues: readonly string[] = []): string {
   let out = input;
   for (const pattern of SECRET_PATTERNS) {
     pattern.lastIndex = 0;
     out = out.replace(pattern, MASK);
+  }
+  for (const secret of secretValues.filter((s) => s.length > 0).sort((a, b) => b.length - a.length)) {
+    out = out.split(secret).join(MASK);
   }
   return out;
 }
@@ -39,16 +42,6 @@ export function redactText(input: string): string {
  * regardless of shape, so a structured `{ api_token: "..." }` cannot leak.
  */
 export function redactValue(value: unknown, secretValues: readonly string[] = []): unknown {
-  const extra = secretValues.filter((s) => s.length > 0);
-
-  const maskExtra = (s: string): string => {
-    let out = s;
-    for (const secret of extra) {
-      out = out.split(secret).join(MASK);
-    }
-    return out;
-  };
-
   const isSecretKey = (key: string): boolean =>
     /(token|secret|password|passwd|api[_-]?key|authorization|credential)/i.test(key);
 
@@ -57,7 +50,7 @@ export function redactValue(value: unknown, secretValues: readonly string[] = []
     // `{ api_token: 123 }` cannot leak a non-string credential.
     if (key && isSecretKey(key)) return MASK;
     if (typeof v === "string") {
-      return maskExtra(redactText(v));
+      return redactText(v, secretValues);
     }
     if (Array.isArray(v)) return v.map((item) => walk(item));
     if (v && typeof v === "object") {

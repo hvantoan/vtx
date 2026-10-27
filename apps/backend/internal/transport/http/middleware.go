@@ -171,7 +171,7 @@ func (s *Server) actorMiddleware(next http.Handler) http.Handler {
 
 		if s.auth != nil {
 			if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
-				session, err := s.auth.Authenticate(r.Context(), cookie.Value)
+				session, err := s.authenticateSession(w, r, cookie.Value)
 				switch {
 				case err == nil:
 					ctx := context.WithValue(r.Context(), registryActorKey{}, domain.ActorOperator)

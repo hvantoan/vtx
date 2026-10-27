@@ -440,7 +440,7 @@ export default function vtxOrchestrator(pi: ExtensionAPI): void {
   pi.on("tool_result", (event): ToolResultEventResult => {
     const secrets = secretValues();
     const content = event.content.map((part) =>
-      part.type === "text" ? { ...part, text: redactText(part.text) } : part,
+      part.type === "text" ? { ...part, text: redactText(part.text, secrets) } : part,
     );
     const structured = redactValue(event.structuredContent, secrets);
     return { content, structuredContent: structured as ToolResultEventResult["structuredContent"] };

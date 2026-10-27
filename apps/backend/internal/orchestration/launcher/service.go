@@ -372,11 +372,10 @@ func (s *Service) supervise(ctx context.Context, cancel context.CancelFunc, runI
 		s.log.Error("orchestrator exit: run unreadable", "run_id", runID, "error", loadErr)
 		return
 	}
-	// Leaving the pipeline mid-stage strands a non-terminal run with no driver.
-	// pr_draft is the hand-off point (the PR is opened; merging is the
-	// operator's), so only parked/terminal states count as finished.
+	// OpenDraftPR completes the run after publishing or adopting the PR.
+	// A clean exit in pr_draft is still incomplete and must not relaunch forever.
 	switch in.Run.State {
-	case domain.StatePRDraft, domain.StateBlocked, domain.StateRetryWait,
+	case domain.StateBlocked, domain.StateRetryWait,
 		domain.StateCompleted, domain.StateFailed, domain.StateCancelled:
 		s.log.Info("orchestrator finished", "run_id", runID, "state", in.Run.State)
 	default:

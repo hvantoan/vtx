@@ -3,8 +3,6 @@ import type { QueueEntry, SeenIssue } from "./state.js";
 import { issueVersion } from "./types.js";
 import type { JiraIssue, JiraSource } from "./types.js";
 
-const MAX_PAGES = 20;
-
 export interface PollDeps {
   source: JiraSource;
   stateDir: string;
@@ -24,11 +22,11 @@ export interface PollResult {
 
 async function fetchAll(source: JiraSource, jql: string, pageSize: number): Promise<JiraIssue[]> {
   const byKey = new Map<string, JiraIssue>();
-  for (let page = 0; page < MAX_PAGES; page += 1) {
+  for (let page = 0; ; page += 1) {
     const startAt = page * pageSize;
     const result = await source.search(jql, pageSize, startAt);
     for (const issue of result.issues) byKey.set(issue.key, issue);
-    if (result.issues.length < pageSize) break;
+    if (result.issues.length < pageSize || (result.total !== undefined && startAt + result.issues.length >= result.total)) break;
   }
   return [...byKey.values()];
 }

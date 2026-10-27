@@ -39,6 +39,8 @@ type AuthSession struct {
 	CreatedAt  time.Time
 	LastSeenAt time.Time
 	ExpiresAt  time.Time
+	// Renewed is response metadata, set only after a successful expiry extension.
+	Renewed bool
 }
 
 type LoginResult struct {
