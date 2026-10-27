@@ -81,6 +81,7 @@ func (f *fakeStore) Block(_ context.Context, in requirement.Input, code string) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blocks = append(f.blocks, code)
+	f.setStateLocked(in.Run.RunID, domain.StateBlocked)
 	return nil
 }
 
@@ -126,9 +127,18 @@ func (f *fakeStore) GrantLease(_ context.Context, runID, owner string, expiresAt
 func (f *fakeStore) setState(runID string, state domain.State) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.setStateLocked(runID, state)
+}
+
+func (f *fakeStore) setStateLocked(runID string, state domain.State) {
 	in := f.inputs[runID]
 	in.Run.State = state
 	f.inputs[runID] = in
+	for i := range f.runs {
+		if f.runs[i].RunID == runID {
+			f.runs[i].RunState = string(state)
+		}
+	}
 }
 
 func (f *fakeStore) blocksSeen() []string {
@@ -197,7 +207,7 @@ func TestTickLaunchesEligibleRunAndReleasesClaim(t *testing.T) {
 	now := time.Now()
 	in := testInput(now, domain.StateCoding)
 	store := newFakeStore(in)
-	runner := &fakeRunner{onStart: func(spec Spec) { store.setState(spec.RunID, domain.StatePRDraft) }}
+	runner := &fakeRunner{onStart: func(spec Spec) { store.setState(spec.RunID, domain.StateCompleted) }}
 	svc := newTestService(t, store, runner, Config{})
 
 	if err := svc.Tick(context.Background()); err != nil {
@@ -320,7 +330,7 @@ func TestNonZeroExitBlocksRun(t *testing.T) {
 }
 
 func TestZeroExitMidPipelineBlocksRun(t *testing.T) {
-	for _, state := range []domain.State{domain.StateCoding, domain.StateVerifying, domain.StateQA, domain.StateQualityGate} {
+	for _, state := range []domain.State{domain.StateCoding, domain.StateVerifying, domain.StateQA, domain.StateQualityGate, domain.StatePRDraft} {
 		t.Run(string(state), func(t *testing.T) {
 			store := newFakeStore(testInput(time.Now(), state))
 			runner := &fakeRunner{}
@@ -330,20 +340,31 @@ func TestZeroExitMidPipelineBlocksRun(t *testing.T) {
 			}
 			svc.Wait()
 			assertBlocked(t, store, "orchestrator_stalled")
+			if err := svc.Tick(context.Background()); err != nil {
+				t.Fatalf("second Tick: %v", err)
+			}
+			svc.Wait()
+			if got := len(runner.specs()); got != 1 {
+				t.Fatalf("stalled run relaunched: %d launches", got)
+			}
 		})
 	}
 }
 
-func TestZeroExitInPRDraftIsFinished(t *testing.T) {
+func TestPRDraftCanRecoverAndCompleteWithoutRelaunching(t *testing.T) {
 	store := newFakeStore(testInput(time.Now(), domain.StatePRDraft))
-	runner := &fakeRunner{}
+	runner := &fakeRunner{onStart: func(spec Spec) { store.setState(spec.RunID, domain.StateCompleted) }}
 	svc := newTestService(t, store, runner, Config{})
 	if err := svc.Tick(context.Background()); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
 	svc.Wait()
+	if err := svc.Tick(context.Background()); err != nil {
+		t.Fatalf("second Tick: %v", err)
+	}
+	svc.Wait()
 	if blocks := store.blocksSeen(); len(blocks) != 0 {
-		t.Fatalf("pr_draft is the hand-off point, got blocks %v", blocks)
+		t.Fatalf("completed PR run got blocks %v", blocks)
 	}
 	if got := len(runner.specs()); got != 1 {
 		t.Fatalf("expected a relaunch in pr_draft, got %d", got)
