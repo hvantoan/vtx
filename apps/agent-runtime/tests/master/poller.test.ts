@@ -123,4 +123,33 @@ describe("pollOnce", () => {
     expect(result.fetched).toBe(3);
     expect(source.starts).toEqual([0, 2]);
   });
+
+  it("queues issues beyond the former 20-page limit", async () => {
+    const dir = await stateDir();
+    const issues = Array.from({ length: 1001 }, (_, i) => issue(`VTX-${i + 1}`, "v1"));
+    const pages = Array.from({ length: 21 }, (_, i) => ({ issues: issues.slice(i * 50, (i + 1) * 50) }));
+    const source = new FakeSource(pages);
+
+    const result = await pollOnce({ source, stateDir: dir, jql: "jql", pageSize: 50, baseline: false, now, log });
+
+    expect(result.fetched).toBe(1001);
+    expect(result.queued).toBe(1001);
+    expect(source.starts.at(-1)).toBe(1000);
+    expect((await queueEntries(dir)).at(-1)?.issue.key).toBe("VTX-1001");
+    const state = JSON.parse(await readFile(statePath(dir), "utf8")) as { seen: Record<string, unknown> };
+    expect(state.seen["VTX-1001"]).toBeDefined();
+  });
+
+  it("stops at the reported total even when the last page is full", async () => {
+    const dir = await stateDir();
+    const source = new FakeSource([
+      { issues: [issue("VTX-1", "v1"), issue("VTX-2", "v1")], total: 4 },
+      { issues: [issue("VTX-3", "v1"), issue("VTX-4", "v1")], total: 4 },
+    ]);
+
+    const result = await pollOnce({ source, stateDir: dir, jql: "jql", pageSize: 2, baseline: false, now, log });
+
+    expect(result.fetched).toBe(4);
+    expect(source.starts).toEqual([0, 2]);
+  });
 });
