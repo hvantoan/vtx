@@ -11,29 +11,271 @@ import (
 )
 
 type Querier interface {
+	// VTX-4 worktree lifecycle queries. Mutations run inside the single pgx.Tx
+	// owned by WorktreeStore so lease acquisition, worktree row, and run branch
+	// commit or roll back together — same boundary discipline as the registry.
+	// Writes the VTX-3 lease columns (they had no writer before VTX-4). Called
+	// only on a row already locked FOR UPDATE by the caller's tx. The epoch bump
+	// invalidates every previously observed epoch — that is the fencing token
+	// stale holders get rejected on.
+	AcquireRunLease(ctx context.Context, arg AcquireRunLeaseParams) (AcquireRunLeaseRow, error)
+	BeatOrchestratorRun(ctx context.Context, arg BeatOrchestratorRunParams) (int64, error)
+	ClaimDeferredForTask(ctx context.Context, taskID pgtype.UUID) (DeferredIntent, error)
+	// VTX-ORCH orchestration launcher claims. worker_heartbeats already models
+	// "one row per long-lived driver", so an orchestrator process claims one run by
+	// inserting a row keyed (run_id, 'agent_host'). The claim token in metadata
+	// makes beat/release conditional: a relauncher that took over after a stale
+	// window can never have its claim deleted by the crashed predecessor.
+	ClaimOrchestratorRun(ctx context.Context, arg ClaimOrchestratorRunParams) (string, error)
+	// VTX-3 outbox dispatcher queries (§0.E: exactly ONE consumer identity, N
+	// replicas — SKIP LOCKED spreads work, `claimed_by` never hides work from a
+	// sibling). `published_at` is the consumer-specific ACK: it is stamped by the
+	// dispatcher AFTER the effect transaction commits, never inside it (TR-20).
+	// Single statement claim+stamp: the SKIP LOCKED sub-select and the UPDATE
+	// cannot drift apart, so two dispatcher replicas never claim the same event.
+	// Expired claims (claimed_until <= now()) are reclaimable after a crash.
+	ClaimOutboxEvents(ctx context.Context, arg ClaimOutboxEventsParams) ([]ClaimOutboxEventsRow, error)
+	// Called only AFTER locking the run and verifying expected_version.
+	// Epoch increment fences the dead worker in the same recovery transaction.
+	ClearExpiredRunLeaseForRetryRecovery(ctx context.Context, runID pgtype.UUID) (int64, error)
+	CountActiveRuns(ctx context.Context) (int64, error)
+	CountDeferredIntents(ctx context.Context) (int64, error)
+	CountLiveAdmissionSlots(ctx context.Context) (int64, error)
+	// Lag of the consumer that reads `event_type` — count + age of the oldest
+	// still-pending event. `task_run.*` stays pending until VTX-5 exists: that is
+	// the intended signal, not a stuck queue.
+	CountOutboxLag(ctx context.Context, eventType string) (CountOutboxLagRow, error)
+	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (CreateAuthSessionRow, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateTaskEvent(ctx context.Context, arg CreateTaskEventParams) (TaskEvent, error)
 	// Retention: terminal noise receipts age out; accepted/duplicate rows and
 	// inbox rows are kept as the dedup/audit record.
 	DeleteExpiredWebhookReceipts(ctx context.Context, days int32) (int64, error)
+	// Upload idempotency: (uri, sha256) content dedupe — a re-upload of identical
+	// content returns the existing row.
+	FindEvidenceArtifactByContent(ctx context.Context, arg FindEvidenceArtifactByContentParams) (EvidenceArtifact, error)
+	FinishRunBaseline(ctx context.Context, arg FinishRunBaselineParams) (VerificationRun, error)
+	// Terminal transition for a 'running' row ONLY. 0 rows means a reconciler or
+	// a fence already moved it — the caller treats that as lease/crash loss.
+	FinishVerificationRun(ctx context.Context, arg FinishVerificationRunParams) (VerificationRun, error)
+	GetActiveWorktreeForTask(ctx context.Context, taskID pgtype.UUID) (Worktree, error)
+	GetDeferredIntentOrigin(ctx context.Context, intentID pgtype.UUID) (GetDeferredIntentOriginRow, error)
+	GetGateVerdict(ctx context.Context, arg GetGateVerdictParams) (GetGateVerdictRow, error)
 	GetJiraWebhookInboxByEventKey(ctx context.Context, arg GetJiraWebhookInboxByEventKeyParams) (JiraWebhookInbox, error)
+	GetLiveAuthSession(ctx context.Context, tokenHash string) (GetLiveAuthSessionRow, error)
+	GetOperatorRunDetail(ctx context.Context, runID pgtype.UUID) (GetOperatorRunDetailRow, error)
+	GetOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (GetOutboxEventRow, error)
+	GetPRRunContext(ctx context.Context, runID pgtype.UUID) (GetPRRunContextRow, error)
+	GetPullRequestByNumber(ctx context.Context, arg GetPullRequestByNumberParams) (PullRequest, error)
+	GetPullRequestByRun(ctx context.Context, runID pgtype.UUID) (PullRequest, error)
+	GetQASessionArtifact(ctx context.Context, arg GetQASessionArtifactParams) (EvidenceArtifact, error)
+	GetQAVerdict(ctx context.Context, arg GetQAVerdictParams) (QaVerdict, error)
+	GetRegistryTaskByIdentity(ctx context.Context, arg GetRegistryTaskByIdentityParams) (GetRegistryTaskByIdentityRow, error)
+	GetRequirementInput(ctx context.Context, runID pgtype.UUID) (GetRequirementInputRow, error)
+	GetRunBaseline(ctx context.Context, arg GetRunBaselineParams) (VerificationRun, error)
+	// Lightweight lease read for fencing checks that do not need the whole row.
+	GetRunLeaseState(ctx context.Context, runID pgtype.UUID) (GetRunLeaseStateRow, error)
+	// D-9.2: the coding session id rides task_run_events.metadata; the latest
+	// event carrying the key wins.
+	GetRunMetadataValue(ctx context.Context, arg GetRunMetadataValueParams) (interface{}, error)
+	GetRunRequirement(ctx context.Context, runID pgtype.UUID) (RunRequirement, error)
+	// Allocation input: the run's task identity fields plus its repo_url (nullable
+	// for tasks created before VTX-4 or before a repo was recorded).
+	GetRunTaskRepo(ctx context.Context, runID pgtype.UUID) (GetRunTaskRepoRow, error)
 	GetTask(ctx context.Context, id string) (Task, error)
+	GetTaskRun(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
+	// The row lock that makes the §0.D error ordering deterministic: the first
+	// committer wins, every other writer blocks here, then reads the NEW version
+	// and is classified as stale_version.
+	GetTaskRunForUpdate(ctx context.Context, runID pgtype.UUID) (TaskRun, error)
+	GetUserByID(ctx context.Context, userID pgtype.UUID) (GetUserByIDRow, error)
+	GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error)
+	GetVerificationRun(ctx context.Context, arg GetVerificationRunParams) (VerificationRun, error)
+	// The gate/QA lookup: "does a full suite set exist at THIS sha".
+	GetVerificationSuiteSetAtSHA(ctx context.Context, arg GetVerificationSuiteSetAtSHAParams) ([]VerificationRun, error)
+	GetWorktreeByRun(ctx context.Context, runID pgtype.UUID) (Worktree, error)
+	// I-03 read side: the partial unique index is the enforcement, this is the
+	// branch selector for admit-vs-defer.
+	HasActiveRunForTask(ctx context.Context, taskID pgtype.UUID) (bool, error)
+	// An intent is consumed once it has either an admitted run or a deferred row.
+	HasConsumedIntent(ctx context.Context, intentID pgtype.UUID) (bool, error)
+	HasPreparationEvidence(ctx context.Context, runID pgtype.UUID) (bool, error)
+	// ON CONFLICT DO NOTHING ⇒ replaying the same intent yields no row (the
+	// inbox receipt already deduped it, this is belt and braces).
+	InsertDeferredIntent(ctx context.Context, arg InsertDeferredIntentParams) (DeferredIntent, error)
+	// Audited redrive step 2: who redrove, for which event, and why.
+	InsertDeliveryRedrive(ctx context.Context, arg InsertDeliveryRedriveParams) (DeliveryRedrive, error)
+	// VTX-9 QA queries. Evidence and verdicts are append-only; the only writes
+	// are inserts inside the SubmitVerdict transaction.
+	InsertEvidenceArtifact(ctx context.Context, arg InsertEvidenceArtifactParams) (EvidenceArtifact, error)
 	InsertExecutionIntent(ctx context.Context, arg InsertExecutionIntentParams) (ExecutionIntent, error)
+	// VTX-10 gate decision queries. Rows are append-only audit records; the
+	// advance-time guard always recomputes rather than reading the latest row.
+	InsertGateDecision(ctx context.Context, arg InsertGateDecisionParams) (GateDecision, error)
+	// Exactly-once persisted effect per (consumer, source event). Duplicate ⇒
+	// pgx.ErrNoRows, which the caller reads as "already consumed".
+	InsertInboxConsumption(ctx context.Context, arg InsertInboxConsumptionParams) (InboxConsumption, error)
 	// VTX-2: Jira webhook intake queries. All dedup writes run inside the single
 	// pgx.Tx opened by the application service (queries.WithTx).
 	// Returns the inserted row; ON CONFLICT DO NOTHING yields an empty result on
 	// duplicate delivery (pgx.ErrNoRows) — that is the dedup signal.
 	InsertJiraWebhookInbox(ctx context.Context, arg InsertJiraWebhookInboxParams) (JiraWebhookInbox, error)
-	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (OutboxEvent, error)
+	InsertOperatorAudit(ctx context.Context, arg InsertOperatorAuditParams) (pgtype.UUID, error)
+	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (InsertOutboxEventRow, error)
+	// VTX-12 draft pull-request persistence.
+	InsertPullRequest(ctx context.Context, arg InsertPullRequestParams) (PullRequest, error)
+	InsertPullRequestOpenedEvent(ctx context.Context, arg InsertPullRequestOpenedEventParams) error
+	// UNIQUE(run_id, attempt) is the one-verdict-per-attempt guard; a second
+	// submitter hits 23505 which the caller maps to ErrQAVerdictConflict (409).
+	InsertQAVerdict(ctx context.Context, arg InsertQAVerdictParams) (QaVerdict, error)
+	InsertQAVerdictEvidenceLink(ctx context.Context, arg InsertQAVerdictEvidenceLinkParams) error
+	InsertRunBaseline(ctx context.Context, arg InsertRunBaselineParams) (VerificationRun, error)
+	// run_id comes from gen_random_uuid() — never from the Go process.
+	InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) (TaskRun, error)
+	// I-05: the creation row is version 0 with previous_state = '' (a run is born,
+	// it does not come from a state).
+	InsertTaskRunEvent(ctx context.Context, arg InsertTaskRunEventParams) (pgtype.UUID, error)
+	// VTX-8 verification queries. Rows are append-only: the only UPDATE is the
+	// guarded 'running' -> terminal finish (or 'superseded' marking on SHA drift).
+	// One row per (run_id, attempt, suite). ON CONFLICT DO NOTHING makes a replay
+	// of the same attempt idempotent: no row is returned and the caller re-reads
+	// the existing row via GetVerificationRun instead of double-writing.
+	InsertVerificationRun(ctx context.Context, arg InsertVerificationRunParams) (VerificationRun, error)
 	// Append-only audit row for every authenticated webhook request. Written
 	// AFTER processing settles (best-effort, outside the acceptance tx) — a
 	// failure here logs an error and never changes the HTTP response.
 	InsertWebhookReceipt(ctx context.Context, arg InsertWebhookReceiptParams) (pgtype.UUID, error)
+	// The run_id UNIQUE is the same-run idempotency key. A race that loses the
+	// INSERT then reads the winner's row via GetWorktreeByRun.
+	InsertWorktree(ctx context.Context, arg InsertWorktreeParams) (Worktree, error)
+	LatestGateDecisionForSHA(ctx context.Context, arg LatestGateDecisionForSHAParams) (GateDecision, error)
+	LatestQAVerdictForSHA(ctx context.Context, arg LatestQAVerdictForSHAParams) (QaVerdict, error)
+	// The receipt is written first (it is the dedup gate, before we know whether a
+	// run is admitted); this links it to the run once the run exists, so the audit
+	// trail can answer "which run did this event create" without a payload join.
+	LinkInboxConsumptionToRun(ctx context.Context, arg LinkInboxConsumptionToRunParams) error
+	// Reconcile read: every allocated row joined to its run so the caller can see
+	// terminal runs and expired leases without a second query.
+	ListAllocatedWorktrees(ctx context.Context) ([]ListAllocatedWorktreesRow, error)
+	ListDeadLettered(ctx context.Context, arg ListDeadLetteredParams) ([]ListDeadLetteredRow, error)
+	// FIFO order is the contract for the admission path (VTX-5).
+	ListDeferredIntents(ctx context.Context, rowLimit int32) ([]DeferredIntent, error)
+	ListDueRetryRuns(ctx context.Context, limit int32) ([]TaskRun, error)
+	ListEvidenceByIDs(ctx context.Context, artifactIds []pgtype.UUID) ([]EvidenceArtifact, error)
+	ListEvidenceForSHA(ctx context.Context, arg ListEvidenceForSHAParams) ([]EvidenceArtifact, error)
+	ListExpiredLeaseRuns(ctx context.Context, limit int32) ([]TaskRun, error)
+	// Crash-recovery scan: nonterminal runs whose lease expired. Parked states
+	// (retry_wait/blocked/queued) are filtered out by the caller — a parked run's
+	// stale lease is an expected leftover, not a dead worker.
+	ListExpiredLeaseRunsForRecovery(ctx context.Context, arg ListExpiredLeaseRunsForRecoveryParams) ([]TaskRun, error)
+	ListGateDecisions(ctx context.Context, runID pgtype.UUID) ([]GateDecision, error)
+	ListPreparingRuns(ctx context.Context, limit int32) ([]pgtype.UUID, error)
+	ListPromotableTasks(ctx context.Context, limit int32) ([]RegistryTask, error)
+	ListPullRequestsByStatus(ctx context.Context, arg ListPullRequestsByStatusParams) ([]PullRequest, error)
+	ListQAVerdictEvidenceIDs(ctx context.Context, verdictID pgtype.UUID) ([]pgtype.UUID, error)
+	ListQueuedRunsForAdmission(ctx context.Context, limit int32) ([]TaskRun, error)
+	// VTX-11 retry/DLQ queries. Sweep reads select by predicate; the CAS on
+	// task_runs.version (UpdateTaskRunState) is what makes a two-replica sweep a
+	// no-op for the loser — no claim column needed.
+	ListRetryWaitRunsDue(ctx context.Context, arg ListRetryWaitRunsDueParams) ([]TaskRun, error)
+	ListRunsFiltered(ctx context.Context, arg ListRunsFilteredParams) ([]ListRunsFilteredRow, error)
+	ListSSEEventsAfter(ctx context.Context, arg ListSSEEventsAfterParams) ([]ListSSEEventsAfterRow, error)
+	// Crash reconcile sweep: rows stuck 'running' whose starter is presumed dead.
+	ListStaleRunningVerification(ctx context.Context, startedAt pgtype.Timestamptz) ([]VerificationRun, error)
 	ListTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error)
+	// Cursor on version, and the creation audit (version 0) must be reachable:
+	// a NULL cursor means "from the beginning", not "after 0".
+	ListTaskRunEvents(ctx context.Context, arg ListTaskRunEventsParams) ([]TaskRunEvent, error)
 	ListTasks(ctx context.Context) ([]Task, error)
+	ListVerificationRuns(ctx context.Context, runID pgtype.UUID) ([]VerificationRun, error)
+	ListWorkerHeartbeats(ctx context.Context) ([]WorkerHeartbeat, error)
+	LockAdmissionLedger(ctx context.Context) error
+	// Serialize deliveries that refer to the same intent, even when they carry
+	// different source event IDs. The intent row is created before its outbox
+	// event, so a missing row is a payload contract fault.
+	LockExecutionIntent(ctx context.Context, intentID pgtype.UUID) (pgtype.UUID, error)
+	LockRunBaseline(ctx context.Context, dollar_1 pgtype.UUID) error
+	// Consumer-specific ACK. `published_at IS NULL` keeps replay idempotent: a
+	// second ACK for the same event reports 0 rows.
+	MarkOutboxPublished(ctx context.Context, outboxIds []pgtype.UUID) (int64, error)
+	MarkPullRequestStatus(ctx context.Context, arg MarkPullRequestStatusParams) (PullRequest, error)
+	// The ONLY mutation of terminal rows: SHA drift marking (FR-QA-003). Rows
+	// bound to a SHA that is not the current one stop counting as evidence.
+	MarkVerificationSuperseded(ctx context.Context, arg MarkVerificationSupersededParams) (int64, error)
+	// Guarded transition: 0 rows means the worktree already moved on (a
+	// reconciler raced a release) and the caller must re-read.
+	MarkWorktreeStatus(ctx context.Context, arg MarkWorktreeStatusParams) (Worktree, error)
+	// D8-7: next attempt is computed, not stored on task_runs.
+	MaxVerificationAttempt(ctx context.Context, runID pgtype.UUID) (int32, error)
+	OutboxStatsByType(ctx context.Context) ([]OutboxStatsByTypeRow, error)
+	PruneAuthSessions(ctx context.Context) (int64, error)
+	// Dead letter: unsupported event_type, schema-invalid payload or exhausted
+	// retries. The row is kept (audit) and excluded from claim until redrive.
+	QuarantineOutboxEvent(ctx context.Context, arg QuarantineOutboxEventParams) (int64, error)
+	// VTX-ORCH: no supervisor owns the Pi lifecycle, so the registry records the
+	// worktree HEAD as the run's subject commit inside the coding→verifying
+	// transition tx (FR-AGT-001: SHA captured by the system, never agent-reported).
+	// Only fills an empty slot in the coding state; an existing SHA is never
+	// rewritten here (SHA drift is the evidence guard's job to reject).
+	RecordRunCommitSHA(ctx context.Context, arg RecordRunCommitSHAParams) (int64, error)
+	RedriveDeadLetter(ctx context.Context, outboxID pgtype.UUID) (int64, error)
+	// Audited redrive step 1: clear the DLQ marker so the dispatcher re-claims
+	// the event. Guarded on dead_lettered_at — a second redrive is a 0-row no-op.
+	RedriveDeadLetteredEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
+	// Operator action: clear the DLQ marker and let the dispatcher try again.
+	RedriveOutboxEvent(ctx context.Context, outboxID pgtype.UUID) (int64, error)
+	ReleaseOrchestratorRun(ctx context.Context, arg ReleaseOrchestratorRunParams) (int64, error)
+	// Idempotent release: owner+epoch match required, so a stale owner can never
+	// clear a fresher lease.
+	ReleaseRunLease(ctx context.Context, arg ReleaseRunLeaseParams) error
+	// Only the recorded owner holding the presented epoch may renew, and only
+	// while the run is live — a terminal run's lease must never be extended.
+	// 0 rows ⇒ caller treats it as a lost lease (stale epoch).
+	RenewRunLease(ctx context.Context, arg RenewRunLeaseParams) (pgtype.Timestamptz, error)
+	// VTX-ORCH: a commit made after coding→verifying fast-forwards the branch. The
+	// verifier re-pins the subject to that HEAD (ancestry checked in Go, never
+	// agent-reported) so QA and the gate evaluate the commit that will ship.
+	// Rewritten history never reaches this query: the caller keeps it stale.
+	RepinRunCommitSHA(ctx context.Context, arg RepinRunCommitSHAParams) (int64, error)
+	RevokeAllUserSessions(ctx context.Context, userID pgtype.UUID) (int64, error)
+	RevokeAuthSession(ctx context.Context, sessionID pgtype.UUID) (int64, error)
+	RevokeUserSessionsExcept(ctx context.Context, arg RevokeUserSessionsExceptParams) (int64, error)
+	// VTX-13 operator dashboard reads and audited DLQ mutation.
+	RunStateHistogram(ctx context.Context) ([]RunStateHistogramRow, error)
+	// Bounded retry: bump attempt, back off, release the claim so a sibling
+	// replica can pick the event up again.
+	ScheduleOutboxRetry(ctx context.Context, arg ScheduleOutboxRetryParams) (int64, error)
+	// Allocation-time repo binding: the scheduler passes repo_url and the first
+	// allocation records it on the task. Later allocations reuse the stored value.
+	SetRegistryTaskRepoURL(ctx context.Context, arg SetRegistryTaskRepoURLParams) error
+	// The allocated branch is persisted on the VTX-3 run row — VTX-4 does not
+	// duplicate it into a new run-level column.
+	SetRunBranch(ctx context.Context, arg SetRunBranchParams) error
+	SetRunPrURL(ctx context.Context, arg SetRunPrURLParams) error
+	SetSchedulerRunError(ctx context.Context, arg SetSchedulerRunErrorParams) error
+	TouchAuthSession(ctx context.Context, arg TouchAuthSessionParams) (int64, error)
 	// Links the accepted inbox row to its intent and stamps the terminal outcome.
 	UpdateJiraWebhookInboxOutcome(ctx context.Context, arg UpdateJiraWebhookInboxOutcomeParams) error
+	UpdatePullRequestSync(ctx context.Context, arg UpdatePullRequestSyncParams) (PullRequest, error)
+	// CAS on version. Called only after GetTaskRunForUpdate; `WHERE version = $10`
+	// is the second line of defence (0 rows ⇒ caller treats it as stale_version).
+	UpdateTaskRunState(ctx context.Context, arg UpdateTaskRunStateParams) (TaskRun, error)
 	UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusParams) error
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
+	// VTX-3 registry queries. Every mutation runs inside the single pgx.Tx opened
+	// by the application service (queries.WithTx), so claim → transition → audit →
+	// outbound event either all commit or none do (TR-17/TR-25).
+	// Identity upsert on (jira_site_id, jira_issue_id). jira_issue_key/project_key/
+	// repo_url are mutable metadata; the identity and task version are not touched.
+	// repo_url (VTX-4) is COALESCEd: a caller that does not know the repo yet must
+	// not erase one a previous delivery recorded.
+	UpsertRegistryTask(ctx context.Context, arg UpsertRegistryTaskParams) (UpsertRegistryTaskRow, error)
+	UpsertRunRequirement(ctx context.Context, arg UpsertRunRequirementParams) (RunRequirement, error)
+	// App-hosted operator authentication. Sessions are looked up by the SHA-256 of
+	// the cookie value; the raw token never reaches the database.
+	UpsertUserPassword(ctx context.Context, arg UpsertUserPasswordParams) (UpsertUserPasswordRow, error)
+	UpsertWorkerHeartbeat(ctx context.Context, arg UpsertWorkerHeartbeatParams) (string, error)
+	UpsertWorkerHeartbeatOp(ctx context.Context, arg UpsertWorkerHeartbeatOpParams) error
 }
 
 var _ Querier = (*Queries)(nil)

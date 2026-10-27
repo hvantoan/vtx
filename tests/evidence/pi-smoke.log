@@ -1,0 +1,12 @@
+
+ RUN  v3.2.7 /home/vif/workspace/vtx/apps/agent-runtime
+
+[2026-10-25T11:46:01.390Z] [agent-runtime] Spawning agent CLI {"agent":"pi","taskId":"smoke-1","cwd":"/tmp/vtx-pi-smoke-BwxZw8"}
+ ✓ tests/pi-smoke.test.ts (1 test) 19510ms
+   ✓ real pi CLI smoke (VTX_SMOKE_PI=1) > executes in a git worktree, produces a commit, and reports test_double=false  19507ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  18:45:59
+   Duration  20.54s (transform 363ms, setup 0ms, collect 428ms, tests 19.51s, environment 0ms, prepare 167ms)
+

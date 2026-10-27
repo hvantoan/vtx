@@ -40,5 +40,5 @@ services:
     ports: !reset []
     environment:
       # Backend is only reachable on the compose network in prod.
-      - NEXT_PUBLIC_API_URL=http://backend:49080
+      - INTERNAL_API_URL=http://backend:49080
       - NEXT_PUBLIC_APP_ENV=production

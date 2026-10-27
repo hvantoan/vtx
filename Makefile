@@ -9,7 +9,7 @@ export GOWORK := off
 BACKEND_DIR := apps/backend
 BIN_DIR := $(BACKEND_DIR)/bin
 
-.PHONY: all help doctor dev build build-backend build-web build-agent test test-backend test-web test-agent test-boundaries lint vet typecheck migrate-up migrate-down compose-up compose-down compose-logs clean
+.PHONY: all help doctor dev build build-backend build-web build-agent test test-backend test-web test-agent test-boundaries lint vet typecheck migrate-up migrate-down compose-up compose-down compose-logs master master-once orchestrate orchestrate-once user-password clean
 
 all: build
 
@@ -31,6 +31,11 @@ help:
 	@echo "  make typecheck         - Typecheck TypeScript projects"
 	@echo "  make compose-up        - Start PostgreSQL and Temporal with Docker Compose"
 	@echo "  make compose-down      - Stop Docker Compose services"
+	@echo "  make master            - Run the Jira master poller loop (30 min interval)"
+	@echo "  make master-once       - Poll Jira once and exit"
+	@echo "  make orchestrate       - Run the coding-stage orchestrator launcher loop"
+	@echo "  make orchestrate-once  - Launch eligible coding runs once and wait"
+	@echo "  make user-password     - Set/reset the operator login password"
 	@echo "  make clean             - Remove build artifacts and temporary files"
 
 # ------------------------------------------------------------------------------
@@ -68,6 +73,13 @@ test: test-boundaries test-backend test-agent test-web
 test-backend:
 	@echo "🧪 Running Go unit tests..."
 	@go -C $(BACKEND_DIR) test -v -race ./...
+
+# Integration tests own the database they are pointed at (goose up/down/up +
+# seeded VTX-2 rows) — always pass a throwaway DSN.
+test-integration:
+	@test -n "$(TEST_DATABASE_URL)" || { echo "❌ TEST_DATABASE_URL is required (throwaway DB)"; exit 1; }
+	@echo "🧪 Running Go integration tests against real Postgres..."
+	@TEST_DATABASE_URL="$(TEST_DATABASE_URL)" go -C $(BACKEND_DIR) test -tags integration -race -p 1 ./...
 
 test-agent:
 	@echo "🧪 Running Agent runtime tests..."
@@ -131,6 +143,31 @@ compose-down:
 
 compose-logs:
 	@docker compose $(COMPOSE_ENV) -f $(COMPOSE_FILE) logs -f
+
+# ------------------------------------------------------------------------------
+# Jira master poller (MCP, deterministic 30-minute loop)
+# ------------------------------------------------------------------------------
+master:
+	@pnpm --filter @vtx/agent-runtime master
+
+master-once:
+	@pnpm --filter @vtx/agent-runtime master:once
+
+# ------------------------------------------------------------------------------
+# Coding-stage orchestrator launcher (Pi headless per coding run)
+# ------------------------------------------------------------------------------
+orchestrate:
+	@go -C $(BACKEND_DIR) run ./cmd/worker orchestrate
+
+orchestrate-once:
+	@go -C $(BACKEND_DIR) run ./cmd/worker orchestrate --once
+
+# ------------------------------------------------------------------------------
+# Operator login (single account; prompts twice when stdin is a TTY)
+# ------------------------------------------------------------------------------
+user-password:
+	@docker compose $(COMPOSE_ENV) -f $(COMPOSE_FILE) exec backend \
+		/app/worker user set-password
 
 # ------------------------------------------------------------------------------
 # Cleanup

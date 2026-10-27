@@ -1,0 +1,89 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "VTX-5/6 Event Contract Deltas",
+ "description": "Proposed additions to contracts/events/v1/events.json — coordinator merges into definitions + PlatformEvent.type enum. Lane A output.",
+ "version": "1.0.0-draft",
+ "platform_event_enum_additions": [
+  "task_run.admitted.v1",
+  "deferred_intent.promoted.v1",
+  "run.lease_lost.v1",
+  "run.requirement_ready.v1",
+  "run.baseline_recorded.v1"
+ ],
+ "definitions": {
+  "TaskRunAdmittedV1": {
+   "type": "object",
+   "description": "Emitted inside the admission tx (VTX-5) after lease grant + queued→preparing transition. live_slots is the post-admission live-slot count — observable proof the ≤3 invariant held at commit time.",
+   "required": ["run_id", "task_id", "lease_owner", "lease_epoch", "lease_expires_at", "live_slots", "occurred_at", "correlation_id"],
+   "properties": {
+    "run_id": {"type": "string", "format": "uuid"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "lease_owner": {"type": "string", "description": "e.g. 'scheduler-01'"},
+    "lease_epoch": {"type": "integer", "minimum": 1},
+    "lease_expires_at": {"type": "string", "format": "date-time"},
+    "live_slots": {"type": "integer", "minimum": 0, "maximum": 3},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string"}
+   }
+  },
+  "DeferredIntentPromotedV1": {
+   "type": "object",
+   "description": "A pending_deferred intent was promoted: deferred_intents.disposition flipped to 'admitted' and a NEW queued task_run created for it (same tx).",
+   "required": ["intent_id", "task_id", "run_id", "deferred_at", "promoted_at", "correlation_id"],
+   "properties": {
+    "intent_id": {"type": "string", "format": "uuid"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "run_id": {"type": "string", "format": "uuid", "description": "The NEW run created for the promoted intent"},
+    "deferred_at": {"type": "string", "format": "date-time"},
+    "promoted_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string"}
+   }
+  },
+  "RunLeaseLostV1": {
+   "type": "object",
+   "description": "RecoverySweeper found a nonterminal run whose lease_expires_at lapsed. The run is blocked (actor=policy, error_code='lease_lost') in the same tx; its admission slot stays counted until stop is confirmed (docs/design/vtx-5-scheduler.md §5).",
+   "required": ["run_id", "task_id", "lease_owner", "lease_epoch", "expired_at", "action", "occurred_at", "correlation_id"],
+   "properties": {
+    "run_id": {"type": "string", "format": "uuid"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "lease_owner": {"type": "string"},
+    "lease_epoch": {"type": "integer"},
+    "expired_at": {"type": "string", "format": "date-time"},
+    "action": {"type": "string", "enum": ["blocked"], "description": "What the sweeper did; extensible to 'released' if a future policy auto-releases"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string"}
+   }
+  },
+  "RunRequirementReadyV1": {
+   "type": "object",
+   "description": "VTX-6: frozen RequirementPacket persisted for the run. requirement_hash is what downstream audit/QA pins to.",
+   "required": ["run_id", "issue_key", "requirement_version", "requirement_hash", "ac_count", "fetched_at", "occurred_at", "correlation_id"],
+   "properties": {
+    "run_id": {"type": "string", "format": "uuid"},
+    "issue_key": {"type": "string"},
+    "requirement_version": {"type": "string"},
+    "requirement_hash": {"type": "string", "description": "sha256 over canonical packet JSON"},
+    "ac_count": {"type": "integer", "minimum": 0},
+    "fetched_at": {"type": "string", "format": "date-time"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string"}
+   }
+  },
+  "RunBaselineRecordedV1": {
+   "type": "object",
+   "description": "VTX-6: baseline suite executed on base_sha and recorded as verification_runs kind='baseline'. A 'failed' baseline is data, not a dispatch blocker (vtx-6 §4.2).",
+   "required": ["run_id", "base_sha", "suite", "status", "occurred_at", "correlation_id"],
+   "properties": {
+    "run_id": {"type": "string", "format": "uuid"},
+    "base_sha": {"type": "string", "description": "worktrees.base_sha the suite ran on"},
+    "suite": {"type": "string", "description": "e.g. 'make test'"},
+    "status": {"type": "string", "enum": ["passed", "failed", "inconclusive"]},
+    "passed": {"type": "integer"},
+    "failed": {"type": "integer"},
+    "verification_run_id": {"type": "string", "format": "uuid"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string"}
+   }
+  }
+ }
+}

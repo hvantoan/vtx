@@ -1,0 +1,22 @@
+=== VTX-3 registry outbox harness (run 235) ====================
+--- TR-03: 2 dispatcher replicas ----------------------------------
+PASS  TR-03 — 2 replicas drained 6 intents to exactly 1 run each (2 replicas observed)
+--- TR-08/TR-20: crash + replay -----------------------------------
+PASS  TR-08 — 3x SIGKILL cycles drained all events: no duplicate run/audit/outbound
+--- TR-12/TR-22: poison + DLQ + redrive ---------------------------
+PASS  TR-12 — poison payload dead-lettered with reason: registry: event payload invalid: missing intent_id
+PASS  TR-22 — redriven poison event dead-lettered again (no infinite retry loop)
+--- TR-13: routing guard ------------------------------------------
+PASS  TR-13 — a task_run.created.v1 row is never claimed, published or dead-lettered by the registry consumer
+--- TR-24: backfill ------------------------------------------------
+PASS  TR-24 — backfill drained 3 pending intents to 0 with no extra job
+--- TR-07: 20 concurrent writers, 2 API replicas -------------------
+PASS  TR-07 — 2 replicas, 20 writers -> 1x200 + 19x409, version 1, one audit row
+--- Secret hygiene ------------------------------------------------
+PASS  SECRETS — no registry actor token in container logs
+--- Metrics --------------------------------------------------------
+     active runs by state:
+queued|13
+     outbox lag (execution_intent.created.v1):
+0|
+=== 8 passed, 0 failed =====================================

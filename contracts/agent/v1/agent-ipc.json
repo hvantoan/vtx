@@ -1,41 +1,86 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "VTX Agent Runtime IPC Protocol Schema",
-  "description": "JSON-RPC 2.0 stdio message schemas for Go supervisor and Node.js Pi/OMP host communication",
-  "version": "1.0.0",
+  "description": "JSON-RPC 2.0 stdio message schemas for Go supervisor and Node.js Pi/OMP host communication — v1.1 adds run correlation, heartbeat/log notifications, env allowlist, artifact + test_double fields (VTX-7/8)",
+  "version": "1.1.0",
   "definitions": {
     "JsonRpcRequest": {
       "type": "object",
-      "required": ["jsonrpc", "id", "method"],
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
       "properties": {
-        "jsonrpc": { "type": "string", "const": "2.0" },
-        "id": { "type": ["string", "number"] },
-        "method": { "type": "string" },
-        "params": { "type": "object" }
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        }
       }
     },
     "JsonRpcNotification": {
       "type": "object",
-      "required": ["jsonrpc", "method"],
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
       "properties": {
-        "jsonrpc": { "type": "string", "const": "2.0" },
-        "method": { "type": "string" },
-        "params": { "type": "object" }
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        }
       }
     },
     "JsonRpcResponse": {
       "type": "object",
-      "required": ["jsonrpc", "id"],
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
       "properties": {
-        "jsonrpc": { "type": "string", "const": "2.0" },
-        "id": { "type": ["string", "number", "null"] },
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ]
+        },
         "result": {},
         "error": {
           "type": "object",
-          "required": ["code", "message"],
+          "required": [
+            "code",
+            "message"
+          ],
           "properties": {
-            "code": { "type": "integer" },
-            "message": { "type": "string" },
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            },
             "data": {}
           }
         }
@@ -43,66 +88,346 @@
     },
     "InitializeParams": {
       "type": "object",
-      "required": ["protocol_version", "client_name"],
+      "required": [
+        "protocol_version",
+        "client_name"
+      ],
       "properties": {
-        "protocol_version": { "type": "string", "enum": ["1.0"] },
-        "client_name": { "type": "string" },
-        "client_version": { "type": "string" }
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "client_name": {
+          "type": "string"
+        },
+        "client_version": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agent_type": {
+          "type": "string",
+          "enum": [
+            "pi",
+            "omp"
+          ]
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "cancellation": {
+              "type": "boolean"
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "heartbeat_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "default": 5000
+            }
+          }
+        },
+        "env_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "InitializeResult": {
       "type": "object",
-      "required": ["protocol_version", "agent_type", "capabilities"],
+      "required": [
+        "protocol_version",
+        "agent_type",
+        "capabilities"
+      ],
       "properties": {
-        "protocol_version": { "type": "string", "const": "1.0" },
-        "agent_type": { "type": "string", "enum": ["pi", "omp"] },
-        "agent_version": { "type": "string" },
+        "protocol_version": {
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string",
+          "enum": [
+            "pi",
+            "omp"
+          ]
+        },
+        "agent_version": {
+          "type": "string"
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "node_version": {
+              "type": "string"
+            },
+            "runtime_pid": {
+              "type": "integer"
+            }
+          }
+        },
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "version",
+              "test_double"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "enum": [
+                  "pi",
+                  "omp"
+                ]
+              },
+              "version": {
+                "type": "string"
+              },
+              "test_double": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
         "capabilities": {
           "type": "object",
           "properties": {
-            "streaming": { "type": "boolean" },
-            "cancellation": { "type": "boolean" }
+            "streaming": {
+              "type": "boolean"
+            },
+            "cancellation": {
+              "type": "boolean"
+            },
+            "heartbeat_ms": {
+              "type": "integer"
+            },
+            "max_event_bytes": {
+              "type": "integer",
+              "default": 65536
+            }
           }
         }
       }
     },
     "TaskExecuteParams": {
       "type": "object",
-      "required": ["task_id", "prompt"],
+      "required": [
+        "task_id",
+        "prompt",
+        "workspace_path"
+      ],
       "properties": {
-        "task_id": { "type": "string" },
-        "prompt": { "type": "string" },
-        "workspace_path": { "type": "string" },
-        "timeout_ms": { "type": "integer", "minimum": 100 }
+        "task_id": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "workspace_path": {
+          "type": "string"
+        },
+        "test_baseline": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100
+        },
+        "env_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": {
+          "type": "object"
+        }
       }
     },
     "TaskExecuteResult": {
       "type": "object",
-      "required": ["task_id", "status"],
+      "required": [
+        "task_id",
+        "status"
+      ],
       "properties": {
-        "task_id": { "type": "string" },
-        "status": { "type": "string", "enum": ["succeeded", "failed", "cancelled"] },
-        "output": { "type": "string" },
-        "error": { "type": "string" }
+        "task_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "output": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "test_double": {
+          "type": "boolean"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "ref"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "commit",
+                  "file",
+                  "log",
+                  "patch"
+                ]
+              },
+              "ref": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "duration_ms": {
+              "type": "integer"
+            },
+            "tokens": {
+              "type": "integer"
+            }
+          }
+        }
       }
     },
     "TaskEventParams": {
       "type": "object",
-      "required": ["task_id", "seq", "event_type", "timestamp"],
+      "required": [
+        "task_id",
+        "seq",
+        "event_type",
+        "timestamp"
+      ],
       "properties": {
-        "task_id": { "type": "string" },
-        "seq": { "type": "integer", "minimum": 0 },
-        "event_type": { "type": "string", "enum": ["stdout", "stderr", "progress", "status_change"] },
-        "payload": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "task_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "stdout",
+            "stderr",
+            "progress",
+            "status_change",
+            "tool_call",
+            "file_diff",
+            "error",
+            "log"
+          ]
+        },
+        "payload": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "data": {
+          "type": "object"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
     },
     "TaskCancelParams": {
       "type": "object",
-      "required": ["task_id"],
+      "required": [
+        "task_id"
+      ],
       "properties": {
-        "task_id": { "type": "string" },
-        "reason": { "type": "string" }
+        "task_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "operator_cancel",
+            "operator_block",
+            "timeout",
+            "lease_lost",
+            "heartbeat_timeout",
+            "shutdown",
+            "superseded"
+          ]
+        }
+      }
+    },
+    "HostHeartbeatParams": {
+      "type": "object",
+      "required": [
+        "pid"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "last_event_seq": {
+          "type": "integer"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "HostLogParams": {
+      "type": "object",
+      "required": [
+        "level",
+        "message"
+      ],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "meta": {
+          "type": "object"
+        }
       }
     }
   }

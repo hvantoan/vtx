@@ -1,9 +1,8 @@
-name: vtx
+name: ${COMPOSE_PROJECT_NAME:-vtx}
 
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: vtx-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: vtx_user
@@ -22,7 +21,6 @@ services:
 
   temporal:
     image: temporalio/auto-setup:1.26.2
-    container_name: vtx-temporal
     restart: unless-stopped
     depends_on:
       postgres:
@@ -45,7 +43,6 @@ services:
 
   temporal-ui:
     image: temporalio/ui:2.34.0
-    container_name: vtx-temporal-ui
     restart: unless-stopped
     depends_on:
       - temporal
@@ -72,8 +69,10 @@ services:
       - DATABASE_URL=postgres://vtx_user:vtx_password@postgres:5432/vtx_platform?sslmode=disable
       - TEMPORAL_HOST_PORT=temporal:7233
       - TEMPORAL_NAMESPACE=default
-      - TEMPORAL_TASK_QUEUE=vtx-task-queue
-      - API_AUTH_TOKEN=vtx-dev-secret-token-change-in-production
+      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-vtx-task-queue}
+      # Operator login sessions; secrets stay in env, never baked into images.
+      - SESSION_TTL=${SESSION_TTL:-720h}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-auto}
       - JIRA_BASE_URL=${JIRA_BASE_URL}
       - JIRA_API_EMAIL=${JIRA_API_EMAIL}
       - JIRA_API_TOKEN=${JIRA_API_TOKEN}
@@ -83,10 +82,34 @@ services:
       - JIRA_CONFIG_PATH=/etc/vtx/jira.yaml
       - JIRA_SITE_ID=${JIRA_SITE_ID}
       - GATEWAY_INTERNAL_AUTH_TOKEN=${GATEWAY_INTERNAL_AUTH_TOKEN}
+      # VTX-3 registry actor tokens (one per principal; cmd/api fails closed).
+      # Compose only forwards listed vars, so they must appear here.
+      - REGISTRY_ACTOR_SCHEDULER_TOKEN=${REGISTRY_ACTOR_SCHEDULER_TOKEN}
+      - REGISTRY_ACTOR_ORCHESTRATOR_TOKEN=${REGISTRY_ACTOR_ORCHESTRATOR_TOKEN}
+      - REGISTRY_ACTOR_POLICY_TOKEN=${REGISTRY_ACTOR_POLICY_TOKEN}
+      - REGISTRY_CONSUMER_NAME=${REGISTRY_CONSUMER_NAME:-registry-intake}
     volumes:
-      - ./config/jira.yaml:/etc/vtx/jira.yaml:ro
+      # JIRA_CONFIG_FILE lets setup-vtx-host.sh mount a machine-local generated
+      # policy (jira.local.yaml) without dirtying the committed jira.yaml.
+      - "./config/${JIRA_CONFIG_FILE:-jira.yaml}:/etc/vtx/jira.yaml:ro"
     ports:
       - "${VTX_API_PORT:-49080}:49080"
+
+  registry-worker:
+    build:
+      context: ../../apps/backend
+      dockerfile: Dockerfile
+    command: ["/app/worker", "registry"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgres://vtx_user:vtx_password@postgres:5432/vtx_platform?sslmode=disable
+      - REGISTRY_CONSUMER_NAME=${REGISTRY_CONSUMER_NAME:-registry-intake}
+      # No Temporal vars and no Jira credentials: this process only talks to
+      # PostgreSQL, so a Temporal outage cannot stop registry intake (D8).
 
   gateway:
     image: nginx:stable-alpine
@@ -112,18 +135,18 @@ services:
     build:
       context: ../..
       dockerfile: apps/web/Dockerfile
-    container_name: vtx-web
     restart: unless-stopped
     depends_on:
       - backend
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:${VTX_API_PORT:-49080}
+      # Same-origin proxy target; override at runtime for a remote API.
+      - INTERNAL_API_URL=http://backend:49080
       - NEXT_PUBLIC_APP_ENV=development
     ports:
       - "${VTX_WEB_PORT:-49030}:49030"
 
 networks:
-  default:
-    name: vtx_net
+  default: {}
+
 volumes:
   postgres_data:

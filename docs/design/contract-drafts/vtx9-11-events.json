@@ -1,0 +1,272 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "VTX Platform Events Schema — VTX-9/10/11 Contract Draft",
+ "description": "DRAFT additions to contracts/events/v1/events.json for the Independent QA (VTX-9), Deterministic Quality Gate (VTX-10), and Retry Orchestration (VTX-11) epics. Coordinator merges 'definitions' and the PlatformEvent type enum into the canonical file. All events are persisted to outbox_events.payload in the same transaction as the state/data they describe (transactional outbox).",
+ "version": "1.0.0-draft.1",
+ "platformEventTypeAdditions": {
+  "description": "Values to append to PlatformEvent.properties.type.enum in contracts/events/v1/events.json",
+  "enum": [
+   "qa.verdict_recorded.v1",
+   "quality_gate.decision.v1",
+   "run.evidence_invalidated.v1",
+   "outbox.delivery_redriven.v1"
+  ]
+ },
+ "definitions": {
+  "QAVerdictRecordedV1": {
+   "type": "object",
+   "description": "Payload for event_type qa.verdict_recorded.v1 (VTX-9 → orchestrator/gate). Written in the same transaction as the qa_verdicts row, so a published event always has a committed verdict at the same attempt. The verdict is bound to the exact commit_sha the QA agent evaluated (FR-QA-001/003).",
+   "required": [
+    "verdict_id",
+    "run_id",
+    "task_id",
+    "attempt",
+    "commit_sha",
+    "verdict",
+    "qa_session_id",
+    "qa_agent_identity",
+    "evidence_ids",
+    "evaluated_at",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "verdict_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "qa_verdicts.verdict_id"
+    },
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "attempt": {
+     "type": "integer",
+     "minimum": 0,
+     "description": "task_runs.attempt the verdict belongs to; one verdict per (run_id, attempt)"
+    },
+    "commit_sha": {
+     "type": "string",
+     "minLength": 7,
+     "description": "Exact commit SHA the QA agent evaluated. Must equal task_runs.commit_sha at submission; a later SHA change invalidates this verdict for gate purposes (FR-QA-003)."
+    },
+    "verdict": {
+     "type": "string",
+     "enum": ["pass", "fail", "inconclusive"]
+    },
+    "findings": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": ["severity", "category", "summary"],
+      "properties": {
+       "severity": {"type": "string", "enum": ["blocker", "major", "minor", "info"]},
+       "category": {"type": "string"},
+       "summary": {"type": "string"},
+       "path": {"type": "string"},
+       "line": {"type": "integer", "minimum": 1},
+       "evidence_artifact_id": {"type": "string", "format": "uuid"}
+      }
+     },
+     "description": "Structured findings only — never raw transcripts or secrets (NFR-AUD-001)."
+    },
+    "qa_session_id": {
+     "type": "string",
+     "description": "VTX-7 agent session ID of the QA run. Must differ from the coding session ID (independence assertion, FR-QA-001)."
+    },
+    "qa_agent_identity": {
+     "type": "string",
+     "description": "Authenticated QA principal, e.g. 'qa-agent:pi@0.x' — never the coding agent identity."
+    },
+    "coding_session_id": {
+     "type": "string",
+     "description": "Snapshot of the coding session ID recorded at QA launch, for the independence check."
+    },
+    "evidence_ids": {
+     "type": "array",
+     "items": {"type": "string", "format": "uuid"},
+     "minItems": 1,
+     "description": "evidence_artifacts.artifact_id values backing this verdict; must include at least one producer='qa_agent', kind='qa_test_run' artifact bound to commit_sha."
+    },
+    "evaluated_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "When the QA agent finished evaluation (RFC3339 UTC)."
+    },
+    "correlation_id": {"type": "string"},
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "Event write time, RFC3339 UTC."
+    }
+   }
+  },
+  "GateConditionResult": {
+   "type": "object",
+   "description": "One mandatory-condition outcome inside a gate decision. Every policy condition appears exactly once per decision — a condition that was not reached is recorded with satisfied=false and detail='not evaluated', never omitted.",
+   "required": ["name", "satisfied", "blocking"],
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "Condition identifier from the policy, e.g. 'run_in_quality_gate', 'sha_binding', 'verification_green', 'qa_verdict_pass', 'qa_executed_tests', 'lease_fencing', 'no_superseding_attempt'."
+    },
+    "satisfied": {"type": "boolean"},
+    "blocking": {
+     "type": "boolean",
+     "description": "Always true for vtx-gate-policy/v1 — all listed conditions are mandatory (FR-QA-002)."
+    },
+    "detail": {
+     "type": "string",
+     "description": "Machine-readable reason when unsatisfied, e.g. 'no qa_verdict for commit_sha'."
+    },
+    "evidence_artifact_ids": {
+     "type": "array",
+     "items": {"type": "string", "format": "uuid"},
+     "description": "Artifacts the condition was evaluated against."
+    }
+   }
+  },
+  "QualityGateDecisionV1": {
+   "type": "object",
+   "description": "Payload for event_type quality_gate.decision.v1 (VTX-10). Mirror of the persisted gate_decisions row — the decision record schema including SHA binding fields. Emitted in the same transaction as the row, for both standalone evaluations and (conceptually) the advance-time recompute. The advance guard never trusts a stored decision; it recomputes on the locked run row, so this event is audit/evidence, not authorization.",
+   "required": [
+    "decision_id",
+    "run_id",
+    "task_id",
+    "attempt",
+    "subject_commit_sha",
+    "policy_name",
+    "policy_version",
+    "decision",
+    "conditions",
+    "blocking_reasons",
+    "evaluator",
+    "evaluated_at",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "decision_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "gate_decisions.decision_id"
+    },
+    "run_id": {"type": "string", "format": "uuid"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "attempt": {"type": "integer", "minimum": 0},
+    "subject_commit_sha": {
+     "type": "string",
+     "minLength": 7,
+     "description": "SHA the decision binds to — copied from the task_runs row locked FOR UPDATE at evaluation time (FR-QA-003)."
+    },
+    "verified_head_sha": {
+     "type": "string",
+     "description": "SHA independently resolved from the run worktree HEAD at evaluation time. Divergence from subject_commit_sha fails the sha_binding condition."
+    },
+    "policy_name": {
+     "type": "string",
+     "description": "e.g. 'vtx-gate-policy'"
+    },
+    "policy_version": {
+     "type": "string",
+     "description": "e.g. 'v1' — the policy snapshot evaluated; guards always run the current version."
+    },
+    "decision": {
+     "type": "string",
+     "enum": ["pass", "fail"],
+     "description": "pass ⇔ every blocking condition satisfied. Deterministic — no free-text input enters the decision (FR-QA-002)."
+    },
+    "conditions": {
+     "type": "array",
+     "items": {"$ref": "#/definitions/GateConditionResult"},
+     "minItems": 1
+    },
+    "blocking_reasons": {
+     "type": "array",
+     "items": {"type": "string"},
+     "description": "Names of unsatisfied blocking conditions, e.g. ['qa_verdict_pass']."
+    },
+    "evaluator": {
+     "type": "string",
+     "description": "System identity that evaluated, e.g. 'gate-engine' — never a human or agent principal."
+    },
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string"},
+    "occurred_at": {"type": "string", "format": "date-time"}
+   }
+  },
+  "RunEvidenceInvalidatedV1": {
+   "type": "object",
+   "description": "Payload for event_type run.evidence_invalidated.v1 (emitted by the commit-recording path — VTX-8 writes it, VTX-9/10 consumers react to it). Signals that task_runs.commit_sha changed while QA verdicts and/or gate decisions existed for the previous SHA: those rows stay as audit history but no guard may accept them (FR-QA-003, E2E-05).",
+   "required": [
+    "run_id",
+    "task_id",
+    "previous_commit_sha",
+    "new_commit_sha",
+    "invalidated_verdict_ids",
+    "invalidated_decision_ids",
+    "reason",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "run_id": {"type": "string", "format": "uuid"},
+    "task_id": {"type": "string", "format": "uuid"},
+    "previous_commit_sha": {"type": "string", "minLength": 7},
+    "new_commit_sha": {"type": "string", "minLength": 7},
+    "invalidated_verdict_ids": {
+     "type": "array",
+     "items": {"type": "string", "format": "uuid"},
+     "description": "qa_verdicts rows bound to previous_commit_sha."
+    },
+    "invalidated_decision_ids": {
+     "type": "array",
+     "items": {"type": "string", "format": "uuid"},
+     "description": "gate_decisions rows bound to previous_commit_sha."
+    },
+    "reason": {
+     "type": "string",
+     "description": "e.g. 'new_commit_recorded', 'amended_commit_detected'"
+    },
+    "correlation_id": {"type": "string"},
+    "occurred_at": {"type": "string", "format": "date-time"}
+   }
+  },
+  "OutboxDeliveryRedrivenV1": {
+   "type": "object",
+   "description": "Payload for event_type outbox.delivery_redriven.v1 (VTX-11 operator action). Emitted in the same transaction that clears the DLQ marker and inserts the delivery_redrives audit row (FR-EVT-002 audited redrive, E2E-07).",
+   "required": [
+    "redrive_id",
+    "outbox_event_id",
+    "event_type",
+    "consumer_name",
+    "actor",
+    "actor_type",
+    "reason",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "redrive_id": {"type": "string", "format": "uuid"},
+    "outbox_event_id": {"type": "string", "format": "uuid"},
+    "event_type": {
+     "type": "string",
+     "description": "The redriven outbox event's type, e.g. 'execution_intent.created.v1'."
+    },
+    "consumer_name": {"type": "string"},
+    "actor": {
+     "type": "string",
+     "description": "Authenticated operator principal (FR-UI-003)."
+    },
+    "actor_type": {"type": "string", "enum": ["system", "human"]},
+    "reason": {"type": "string"},
+    "correlation_id": {"type": "string"},
+    "occurred_at": {"type": "string", "format": "date-time"}
+   }
+  }
+ }
+}

@@ -1,60 +1,902 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "VTX Platform Events Schema",
-  "description": "Event formats emitted by the VTX platform over SSE and internal message brokers",
-  "version": "1.0.0",
-  "definitions": {
-    "PlatformEvent": {
-      "type": "object",
-      "required": ["id", "type", "timestamp", "source", "data"],
-      "properties": {
-        "id": { "type": "string" },
-        "type": {
-          "type": "string",
-          "enum": [
-            "system.heartbeat",
-            "task.created",
-            "task.started",
-            "task.progress",
-            "task.completed",
-            "worker.status_changed",
-            "execution_intent.created.v1"
-          ]
-        },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "source": { "type": "string" },
-        "data": { "type": "object" }
-      }
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "VTX Platform Events Schema",
+ "description": "Event formats emitted by the VTX platform over SSE and internal message brokers",
+ "version": "1.0.0",
+ "definitions": {
+  "PlatformEvent": {
+   "type": "object",
+   "required": [
+    "id",
+    "type",
+    "timestamp",
+    "source",
+    "data"
+   ],
+   "properties": {
+    "id": {
+     "type": "string"
     },
-    "ExecutionIntentCreatedV1": {
+    "type": {
+     "type": "string",
+     "enum": [
+      "system.heartbeat",
+      "task.created",
+      "task.started",
+      "task.progress",
+      "task.completed",
+      "worker.status_changed",
+      "execution_intent.created.v1",
+      "task_run.created.v1",
+      "task_run.state_changed.v1",
+      "task_run.intent_deferred.v1",
+      "task_run.admitted.v1",
+      "deferred_intent.promoted.v1",
+      "run.lease_lost.v1",
+      "run.requirement_ready.v1",
+      "run.baseline_recorded.v1"
+     ]
+    },
+    "timestamp": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "source": {
+     "type": "string"
+    },
+    "data": {
+     "type": "object"
+    }
+   }
+  },
+  "ExecutionIntentCreatedV1": {
+   "type": "object",
+   "description": "Payload persisted to outbox_events.payload for event_type execution_intent.created.v1 (VTX-2 → VTX-3). changelog_id is the Jira changelog.id — NOT a Jira workflow transition ID. occurred_at is the Jira webhook envelope timestamp normalized to UTC; occurred_at_source records whether it came from the webhook timestamp or fell back to the intake received_at.",
+   "required": [
+    "event_id",
+    "intent_id",
+    "issue_id",
+    "issue_key",
+    "jira_site_id",
+    "changelog_id",
+    "target_status_id",
+    "occurred_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "event_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "jira_webhook_inbox.event_id"
+    },
+    "intent_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "execution_intents.intent_id"
+    },
+    "issue_id": {
+     "type": "string",
+     "description": "Authoritative Jira issue.id (re-fetched, never trusted from the payload)"
+    },
+    "issue_key": {
+     "type": "string",
+     "description": "Display key, e.g. VTX-2"
+    },
+    "jira_site_id": {
+     "type": "string"
+    },
+    "changelog_id": {
+     "type": "string",
+     "description": "Jira changelog.id of the accepted status transition"
+    },
+    "target_status_id": {
+     "type": "string",
+     "description": "changelog `to` status ID; always a configured start_status_id"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "RFC3339 UTC"
+    },
+    "occurred_at_source": {
+     "type": "string",
+     "enum": [
+      "webhook_timestamp",
+      "received_at"
+     ]
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "TaskRunCreatedV1": {
+   "type": "object",
+   "description": "Payload persisted to outbox_events.payload for event_type task_run.created.v1 (VTX-3 → VTX-5). Emitted inside the same transaction that admits the run, so it exists if and only if the run exists.",
+   "required": [
+    "run_id",
+    "task_id",
+    "intent_id",
+    "jira_site_id",
+    "jira_issue_id",
+    "issue_key",
+    "state",
+    "version",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "task_runs.run_id"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "registry_tasks.id"
+    },
+    "intent_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "execution_intents.intent_id — also outbox_events.intent_id"
+    },
+    "jira_site_id": {
+     "type": "string"
+    },
+    "jira_issue_id": {
+     "type": "string",
+     "description": "Authoritative Jira issue.id"
+    },
+    "issue_key": {
+     "type": "string",
+     "description": "Display key, e.g. VTX-3"
+    },
+    "state": {
+     "type": "string",
+     "enum": [
+      "queued"
+     ],
+     "description": "Always queued: a run is born queued at version 0"
+    },
+    "version": {
+     "type": "integer",
+     "minimum": 0,
+     "description": "Always 0 for this event"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "RFC3339 UTC"
+    }
+   }
+  },
+  "TaskRunStateChangedV1": {
+   "type": "object",
+   "description": "Payload for event_type task_run.state_changed.v1 (VTX-3 → VTX-5). Emitted in the same transaction as the task_runs update and the audit row, so a published event always has a committed audit record at the same version.",
+   "required": [
+    "run_id",
+    "task_id",
+    "intent_id",
+    "previous_state",
+    "current_state",
+    "action",
+    "actor",
+    "actor_type",
+    "version",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "intent_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "previous_state": {
+     "type": "string",
+     "description": "task_runs.state before the transition"
+    },
+    "current_state": {
+     "type": "string",
+     "description": "task_runs.state after the transition"
+    },
+    "action": {
+     "type": "string",
+     "enum": [
+      "begin",
+      "advance",
+      "complete",
+      "block",
+      "resume",
+      "schedule_retry",
+      "retry_due",
+      "cancel",
+      "fail"
+     ]
+    },
+    "actor": {
+     "type": "string",
+     "enum": [
+      "scheduler",
+      "orchestrator",
+      "operator",
+      "policy"
+     ]
+    },
+    "actor_type": {
+     "type": "string",
+     "enum": [
+      "system",
+      "human"
+     ]
+    },
+    "version": {
+     "type": "integer",
+     "minimum": 1,
+     "description": "task_runs.version after the transition (matches task_run_events.version)"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "TaskRunIntentDeferredV1": {
+   "type": "object",
+   "description": "Payload for event_type task_run.intent_deferred.v1 (VTX-3 → VTX-5). A second intent arrived while the task already had an active run; it is queued FIFO in deferred_intents and no run was created.",
+   "required": [
+    "intent_id",
+    "task_id",
+    "jira_site_id",
+    "jira_issue_id",
+    "issue_key",
+    "disposition",
+    "reason",
+    "received_at"
+   ],
+   "properties": {
+    "intent_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "registry_tasks.id of the task the intent was deferred for"
+    },
+    "jira_site_id": {
+     "type": "string"
+    },
+    "jira_issue_id": {
+     "type": "string"
+    },
+    "issue_key": {
+     "type": "string"
+    },
+    "disposition": {
+     "type": "string",
+     "enum": [
+      "pending_deferred"
+     ]
+    },
+    "reason": {
+     "type": "string",
+     "description": "Why the intent was deferred; currently active_run_in_progress"
+    },
+    "received_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "TaskRunAdmittedV1": {
+   "type": "object",
+   "description": "Emitted inside the admission tx (VTX-5) after lease grant + queued→preparing transition. live_slots is the post-admission live-slot count — observable proof the ≤3 invariant held at commit time.",
+   "required": [
+    "run_id",
+    "task_id",
+    "lease_owner",
+    "lease_epoch",
+    "lease_expires_at",
+    "live_slots",
+    "occurred_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "lease_owner": {
+     "type": "string",
+     "description": "e.g. 'scheduler-01'"
+    },
+    "lease_epoch": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "lease_expires_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "live_slots": {
+     "type": "integer",
+     "minimum": 0,
+     "maximum": 3
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "DeferredIntentPromotedV1": {
+   "type": "object",
+   "description": "A pending_deferred intent was promoted: deferred_intents.disposition flipped to 'admitted' and a NEW queued task_run created for it (same tx).",
+   "required": [
+    "intent_id",
+    "task_id",
+    "run_id",
+    "deferred_at",
+    "promoted_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "intent_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "run_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "The NEW run created for the promoted intent"
+    },
+    "deferred_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "promoted_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "RunLeaseLostV1": {
+   "type": "object",
+   "description": "RecoverySweeper found a nonterminal run whose lease_expires_at lapsed. The run is blocked (actor=policy, error_code='lease_lost') in the same tx; its admission slot stays counted until stop is confirmed (docs/design/vtx-5-scheduler.md §5).",
+   "required": [
+    "run_id",
+    "task_id",
+    "lease_owner",
+    "lease_epoch",
+    "expired_at",
+    "action",
+    "occurred_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "lease_owner": {
+     "type": "string"
+    },
+    "lease_epoch": {
+     "type": "integer"
+    },
+    "expired_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "action": {
+     "type": "string",
+     "enum": [
+      "blocked"
+     ],
+     "description": "What the sweeper did; extensible to 'released' if a future policy auto-releases"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "RunRequirementReadyV1": {
+   "type": "object",
+   "description": "VTX-6: frozen RequirementPacket persisted for the run. requirement_hash is what downstream audit/QA pins to.",
+   "required": [
+    "run_id",
+    "issue_key",
+    "requirement_version",
+    "requirement_hash",
+    "ac_count",
+    "fetched_at",
+    "occurred_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "issue_key": {
+     "type": "string"
+    },
+    "requirement_version": {
+     "type": "string"
+    },
+    "requirement_hash": {
+     "type": "string",
+     "description": "sha256 over canonical packet JSON"
+    },
+    "ac_count": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "fetched_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "RunBaselineRecordedV1": {
+   "type": "object",
+   "description": "VTX-6: baseline suite executed on base_sha and recorded as verification_runs kind='baseline'. A 'failed' baseline is data, not a dispatch blocker (vtx-6 §4.2).",
+   "required": [
+    "run_id",
+    "base_sha",
+    "suite",
+    "status",
+    "occurred_at",
+    "correlation_id"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "base_sha": {
+     "type": "string",
+     "description": "worktrees.base_sha the suite ran on"
+    },
+    "suite": {
+     "type": "string",
+     "description": "e.g. 'make test'"
+    },
+    "status": {
+     "type": "string",
+     "enum": [
+      "passed",
+      "failed",
+      "inconclusive"
+     ]
+    },
+    "passed": {
+     "type": "integer"
+    },
+    "failed": {
+     "type": "integer"
+    },
+    "verification_run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "correlation_id": {
+     "type": "string"
+    }
+   }
+  },
+  "QAVerdictRecordedV1": {
+   "type": "object",
+   "description": "Payload for event_type qa.verdict_recorded.v1 (VTX-9 → orchestrator/gate). Written in the same transaction as the qa_verdicts row, so a published event always has a committed verdict at the same attempt. The verdict is bound to the exact commit_sha the QA agent evaluated (FR-QA-001/003).",
+   "required": [
+    "verdict_id",
+    "run_id",
+    "task_id",
+    "attempt",
+    "commit_sha",
+    "verdict",
+    "qa_session_id",
+    "qa_agent_identity",
+    "evidence_ids",
+    "evaluated_at",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "verdict_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "qa_verdicts.verdict_id"
+    },
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "attempt": {
+     "type": "integer",
+     "minimum": 0,
+     "description": "task_runs.attempt the verdict belongs to; one verdict per (run_id, attempt)"
+    },
+    "commit_sha": {
+     "type": "string",
+     "minLength": 7,
+     "description": "Exact commit SHA the QA agent evaluated. Must equal task_runs.commit_sha at submission; a later SHA change invalidates this verdict for gate purposes (FR-QA-003)."
+    },
+    "verdict": {
+     "type": "string",
+     "enum": [
+      "pass",
+      "fail",
+      "inconclusive"
+     ]
+    },
+    "findings": {
+     "type": "array",
+     "items": {
       "type": "object",
-      "description": "Payload persisted to outbox_events.payload for event_type execution_intent.created.v1 (VTX-2 → VTX-3). changelog_id is the Jira changelog.id — NOT a Jira workflow transition ID. occurred_at is the Jira webhook envelope timestamp normalized to UTC; occurred_at_source records whether it came from the webhook timestamp or fell back to the intake received_at.",
       "required": [
-        "event_id",
-        "intent_id",
-        "issue_id",
-        "issue_key",
-        "jira_site_id",
-        "changelog_id",
-        "target_status_id",
-        "occurred_at",
-        "correlation_id"
+       "severity",
+       "category",
+       "summary"
       ],
       "properties": {
-        "event_id": { "type": "string", "format": "uuid", "description": "jira_webhook_inbox.event_id" },
-        "intent_id": { "type": "string", "format": "uuid", "description": "execution_intents.intent_id" },
-        "issue_id": { "type": "string", "description": "Authoritative Jira issue.id (re-fetched, never trusted from the payload)" },
-        "issue_key": { "type": "string", "description": "Display key, e.g. VTX-2" },
-        "jira_site_id": { "type": "string" },
-        "changelog_id": { "type": "string", "description": "Jira changelog.id of the accepted status transition" },
-        "target_status_id": { "type": "string", "description": "changelog `to` status ID; always a configured start_status_id" },
-        "occurred_at": { "type": "string", "format": "date-time", "description": "RFC3339 UTC" },
-        "occurred_at_source": {
-          "type": "string",
-          "enum": ["webhook_timestamp", "received_at"]
-        },
-        "correlation_id": { "type": "string" }
+       "severity": {
+        "type": "string",
+        "enum": [
+         "blocker",
+         "major",
+         "minor",
+         "info"
+        ]
+       },
+       "category": {
+        "type": "string"
+       },
+       "summary": {
+        "type": "string"
+       },
+       "path": {
+        "type": "string"
+       },
+       "line": {
+        "type": "integer",
+        "minimum": 1
+       },
+       "evidence_artifact_id": {
+        "type": "string",
+        "format": "uuid"
+       }
       }
+     },
+     "description": "Structured findings only — never raw transcripts or secrets (NFR-AUD-001)."
+    },
+    "qa_session_id": {
+     "type": "string",
+     "description": "VTX-7 agent session ID of the QA run. Must differ from the coding session ID (independence assertion, FR-QA-001)."
+    },
+    "qa_agent_identity": {
+     "type": "string",
+     "description": "Authenticated QA principal, e.g. 'qa-agent:pi@0.x' — never the coding agent identity."
+    },
+    "coding_session_id": {
+     "type": "string",
+     "description": "Snapshot of the coding session ID recorded at QA launch, for the independence check."
+    },
+    "evidence_ids": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "minItems": 1,
+     "description": "evidence_artifacts.artifact_id values backing this verdict; must include at least one producer='qa_agent', kind='qa_test_run' artifact bound to commit_sha."
+    },
+    "evaluated_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "When the QA agent finished evaluation (RFC3339 UTC)."
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "Event write time, RFC3339 UTC."
     }
+   }
+  },
+  "GateConditionResult": {
+   "type": "object",
+   "description": "One mandatory-condition outcome inside a gate decision. Every policy condition appears exactly once per decision — a condition that was not reached is recorded with satisfied=false and detail='not evaluated', never omitted.",
+   "required": [
+    "name",
+    "satisfied",
+    "blocking"
+   ],
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "Condition identifier from the policy, e.g. 'run_in_quality_gate', 'sha_binding', 'verification_green', 'qa_verdict_pass', 'qa_executed_tests', 'lease_fencing', 'no_superseding_attempt'."
+    },
+    "satisfied": {
+     "type": "boolean"
+    },
+    "blocking": {
+     "type": "boolean",
+     "description": "Always true for vtx-gate-policy/v1 — all listed conditions are mandatory (FR-QA-002)."
+    },
+    "detail": {
+     "type": "string",
+     "description": "Machine-readable reason when unsatisfied, e.g. 'no qa_verdict for commit_sha'."
+    },
+    "evidence_artifact_ids": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "description": "Artifacts the condition was evaluated against."
+    }
+   }
+  },
+  "QualityGateDecisionV1": {
+   "type": "object",
+   "description": "Payload for event_type quality_gate.decision.v1 (VTX-10). Mirror of the persisted gate_decisions row — the decision record schema including SHA binding fields. Emitted in the same transaction as the row, for both standalone evaluations and (conceptually) the advance-time recompute. The advance guard never trusts a stored decision; it recomputes on the locked run row, so this event is audit/evidence, not authorization.",
+   "required": [
+    "decision_id",
+    "run_id",
+    "task_id",
+    "attempt",
+    "subject_commit_sha",
+    "policy_name",
+    "policy_version",
+    "decision",
+    "conditions",
+    "blocking_reasons",
+    "evaluator",
+    "evaluated_at",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "decision_id": {
+     "type": "string",
+     "format": "uuid",
+     "description": "gate_decisions.decision_id"
+    },
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "attempt": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "subject_commit_sha": {
+     "type": "string",
+     "minLength": 7,
+     "description": "SHA the decision binds to — copied from the task_runs row locked FOR UPDATE at evaluation time (FR-QA-003)."
+    },
+    "verified_head_sha": {
+     "type": "string",
+     "description": "SHA independently resolved from the run worktree HEAD at evaluation time. Divergence from subject_commit_sha fails the sha_binding condition."
+    },
+    "policy_name": {
+     "type": "string",
+     "description": "e.g. 'vtx-gate-policy'"
+    },
+    "policy_version": {
+     "type": "string",
+     "description": "e.g. 'v1' — the policy snapshot evaluated; guards always run the current version."
+    },
+    "decision": {
+     "type": "string",
+     "enum": [
+      "pass",
+      "fail"
+     ],
+     "description": "pass ⇔ every blocking condition satisfied. Deterministic — no free-text input enters the decision (FR-QA-002)."
+    },
+    "conditions": {
+     "type": "array",
+     "items": {
+      "$ref": "#/definitions/GateConditionResult"
+     },
+     "minItems": 1
+    },
+    "blocking_reasons": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Names of unsatisfied blocking conditions, e.g. ['qa_verdict_pass']."
+    },
+    "evaluator": {
+     "type": "string",
+     "description": "System identity that evaluated, e.g. 'gate-engine' — never a human or agent principal."
+    },
+    "evaluated_at": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "RunEvidenceInvalidatedV1": {
+   "type": "object",
+   "description": "Payload for event_type run.evidence_invalidated.v1 (emitted by the commit-recording path — VTX-8 writes it, VTX-9/10 consumers react to it). Signals that task_runs.commit_sha changed while QA verdicts and/or gate decisions existed for the previous SHA: those rows stay as audit history but no guard may accept them (FR-QA-003, E2E-05).",
+   "required": [
+    "run_id",
+    "task_id",
+    "previous_commit_sha",
+    "new_commit_sha",
+    "invalidated_verdict_ids",
+    "invalidated_decision_ids",
+    "reason",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "task_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "previous_commit_sha": {
+     "type": "string",
+     "minLength": 7
+    },
+    "new_commit_sha": {
+     "type": "string",
+     "minLength": 7
+    },
+    "invalidated_verdict_ids": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "description": "qa_verdicts rows bound to previous_commit_sha."
+    },
+    "invalidated_decision_ids": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "description": "gate_decisions rows bound to previous_commit_sha."
+    },
+    "reason": {
+     "type": "string",
+     "description": "e.g. 'new_commit_recorded', 'amended_commit_detected'"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "OutboxDeliveryRedrivenV1": {
+   "type": "object",
+   "description": "Payload for event_type outbox.delivery_redriven.v1 (VTX-11 operator action). Emitted in the same transaction that clears the DLQ marker and inserts the delivery_redrives audit row (FR-EVT-002 audited redrive, E2E-07).",
+   "required": [
+    "redrive_id",
+    "outbox_event_id",
+    "event_type",
+    "consumer_name",
+    "actor",
+    "actor_type",
+    "reason",
+    "correlation_id",
+    "occurred_at"
+   ],
+   "properties": {
+    "redrive_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "outbox_event_id": {
+     "type": "string",
+     "format": "uuid"
+    },
+    "event_type": {
+     "type": "string",
+     "description": "The redriven outbox event's type, e.g. 'execution_intent.created.v1'."
+    },
+    "consumer_name": {
+     "type": "string"
+    },
+    "actor": {
+     "type": "string",
+     "description": "Authenticated operator principal (FR-UI-003)."
+    },
+    "actor_type": {
+     "type": "string",
+     "enum": [
+      "system",
+      "human"
+     ]
+    },
+    "reason": {
+     "type": "string"
+    },
+    "correlation_id": {
+     "type": "string"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
   }
+ }
 }

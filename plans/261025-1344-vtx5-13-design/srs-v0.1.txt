@@ -1,0 +1,464 @@
+
+SOFTWARE REQUIREMENTS SPECIFICATION
+VTX — Nền tảng điều phối phát triển phần mềm tự động bằng AI
+Jira → Task Registry → Scheduling → Coding Agent → Independent QA → Quality Gate → GitHub Draft PR
+Version: 0.1  |  Ngày: 25/10/2026  |  Trạng thái: Draft for stakeholder review
+Phạm vi: Toàn bộ VTX platform; không giới hạn VTX-3.
+
+Kiểm soát tài liệu
+Thuộc tính
+Giá trị
+Mã tài liệu
+VTX-SRS-001
+Phiên bản
+0.1
+Trạng thái
+Bản tổng hợp yêu cầu — chưa phê duyệt toàn hệ thống
+Nguồn
+Bối cảnh hội thoại dự án AI Agent; SPEC-001/VTX-14; SPEC-AUTO-01/VTX-2; SPEC-AUTO-02/VTX-3; định hướng VTX-4..13
+Repository tham chiếu
+https://github.com/hvantoan/vtx
+Jira Epic
+https://vtxsolution.atlassian.net/browse/VTX-1
+Ngôn ngữ
+Tiếng Việt; mã state/event/API bằng tiếng Anh
+1. Giới thiệu
+1.1 Mục tiêu
+VTX là nền tảng điều phối chuỗi công việc kỹ thuật từ Jira đến Pull Request dự thảo với AI coding agents, kiểm thử độc lập, audit có thể truy vết và các cổng quyết định xác định. Mục tiêu là tự động hóa phần thao tác lặp lại, nhưng giữ quyền phê duyệt merge và triển khai production cho con người.
+1.2 Trong phạm vi
+Tiếp nhận webhook Jira, xác thực nguồn, đọc lại issue và deduplicate transition.
+Đăng ký execution intent, task/run registry, state transitions, durable outbox và audit.
+Scheduler, worker leasing/fencing, admission và giới hạn tác vụ đồng thời.
+Git worktree lifecycle, môi trường cô lập và agent runtime Pi/OMP.
+Trích xuất requirement, test baseline, coding, verification, QA độc lập.
+Quality Gate dựa trên bằng chứng chính xác của commit SHA; retry có giới hạn; GitHub Draft PR.
+Dashboard trạng thái, tiến độ và khả năng điều tra lỗi qua logs/evidence.
+1.3 Ngoài phạm vi MVP
+AI tự merge PR hoặc deploy production.
+Chạy đồng thời quá 3 tác vụ coding được admit (giới hạn MVP mục tiêu).
+Khẳng định chất lượng mã nguồn chỉ từ đánh giá chủ quan của một agent.
+Ứng dụng mobile/desktop riêng; monorepo mới có Web UI.
+1.4 Nguồn và độ chắc chắn
+Các yêu cầu VTX-14, VTX-2 và VTX-3 dựa trên đặc tả đã thảo luận/chốt trong dự án. Phần VTX-4..13 được tổng hợp từ mục tiêu kiến trúc và phân chia epic; nhiều quyết định chi tiết chưa được đối chiếu với ticket gốc. Mọi mục gắn [PROPOSED] cần stakeholder phê duyệt trước khi coi là hợp đồng triển khai.
+2. Mô tả sản phẩm tổng quát
+2.1 Actors
+Actor
+Vai trò
+Jira
+Phát sinh issue updates và là nguồn sự thật của trạng thái issue
+Webhook Gateway
+Xác thực request inbound, giới hạn traffic, che secret, gửi internal auth
+Operator/Tech Lead
+Giám sát, resume/cancel, xử lý DLQ và phê duyệt cần thiết
+Scheduler
+Admission, concurrency, lease allocation và renewal
+Coding Agent
+Thực hiện sửa mã trong sandbox/worktree
+QA Agent
+Độc lập đánh giá code/tests/evidence
+Quality Gate
+Quyết định PASS/FAIL dựa trên policy xác định
+GitHub
+Source control, CI status và Draft PR
+Platform Administrator
+Cấu hình credential, policy, quyền truy cập và vận hành
+2.2 Mô hình logic
+Jira Cloud → HTTPS Webhook Gateway → Go HTTP Intake → PostgreSQL Inbox/Execution Intent/Outbox → Task Registry &amp; State Machine → Scheduler → Worktree/Sandbox → Coding Agent → Verification → Independent QA → Deterministic Quality Gate → GitHub Draft PR → Human Review/Merge.
+PostgreSQL lưu trạng thái bền vững và audit. Temporal phục vụ orchestration bền vững cho giai đoạn pipeline phù hợp; VTX-3 không tự chạy workflow Temporal. REST/SSE phục vụ giao tiếp với Web Cockpit.
+2.3 Stack và deployment ràng buộc
+Layer
+Ràng buộc
+Backend
+Go modular monolith, chi router, structured slog
+Persistence
+PostgreSQL 17, pgx, SQL-first sqlc, Goose migrations
+Orchestration
+Self-hosted Temporal Go SDK (workflow execution ở giai đoạn sau)
+Frontend
+Next.js App Router, React, TypeScript strict, Tailwind/shadcn/ui
+Agent host
+Node.js/TypeScript, JSON-RPC 2.0 stdio; Pi primary, OMP secondary
+Repository
+Một Git monorepo; duy nhất một Go module ở apps/backend; pnpm cho JS apps
+Infra MVP
+Docker Compose; GitHub Actions path-aware CI
+Deployment network
+Hỗ trợ nội bộ/private; không bắt buộc public dashboard
+3. Use cases và hành trình nghiệp vụ
+UC-01 — Jira issue chuyển Ready to Dev
+Jira phát webhook; gateway xác thực; service parse changelog; Jira API re-fetch; đối chiếu trạng thái/project; insert intent/outbox nguyên tử; trả disposition.
+UC-02 — Webhook trùng hoặc issue thay đổi trạng thái
+Replay cùng transition trả duplicate không tạo run; issue không còn eligible trả ignored/audit; re-entry transition mới được giữ là intent khác.
+UC-03 — Task Run được admit
+Consumer nhận intent; registry tạo run queued hoặc giữ deferred; scheduler cấp lease/admission tối đa 3 run coding đồng thời.
+UC-04 — Coding và independent QA
+Tạo sandbox/worktree; agent coding tạo commit; chạy verification; QA độc lập chấm chính xác SHA và đưa evidence.
+UC-05 — Quality Gate và PR
+Gate xác định PASS theo policy; chỉ khi đủ evidence mới tạo Draft PR; human review và merge riêng.
+UC-06 — Lỗi, retry, cancel và khôi phục
+Retry có budget; operator block/resume/cancel; worker crash không làm mất trạng thái/intent; stale lease bị từ chối.
+UC-07 — Vận hành và quan sát
+Operator xem trạng thái, timeline, evidence, dead-letter, outbox lag; xử lý redrive có audit.
+4. Yêu cầu chức năng (Functional Requirements)
+4.1 Jira Event Intake — VTX-2
+ID
+Yêu cầu (shall)
+Ưu tiên
+FR-JIRA-001
+Chỉ chấp nhận webhook đã được gateway xác thực, fail-closed; không giả định Jira Cloud admin webhook luôn có HMAC hoặc bearer header.
+MUST
+FR-JIRA-002
+Xác minh status transition theo changelog ID và configured Jira start status IDs; không hardcode tên Ready to Dev hoặc ID cố định.
+MUST
+FR-JIRA-003
+Đọc lại Jira issue qua API để kiểm tra identity, project allowlist và trạng thái hiện tại trước khi tạo intent.
+MUST
+FR-JIRA-004
+Khóa idempotency là (jira_site_id, issue_id, changelog_id, target_status_id) với UNIQUE PostgreSQL.
+MUST
+FR-JIRA-005
+Ghi inbox + execution_intent + outbox trong cùng transaction; duplicate không tạo intent/outbox mới.
+MUST
+FR-JIRA-006
+Phân biệt accepted, duplicate, ignored_stale, ignored_scope, malformed, unauthorized và retryable infrastructure failure.
+MUST
+FR-JIRA-007
+Bảo vệ secrets trong URL/log; gateway strip forged internal-auth header và ngăn truy cập thẳng đến Go intake.
+MUST
+4.2 Registry &amp; State Machine — VTX-3
+ID
+Yêu cầu (shall)
+Ưu tiên
+FR-REG-001
+Task dùng identity ổn định (jira_site_id, jira_issue_id); issue_key được phép thay đổi.
+MUST
+FR-REG-002
+Mỗi intent tạo tối đa một task_run; consumption receipt đảm bảo exactly-once database effect khi delivery at-least-once.
+MUST
+FR-REG-003
+Run mới bắt đầu queued, version=0 và creation audit version=0.
+MUST
+FR-REG-004
+Mỗi task tối đa một admitted nonterminal run; intent mới trong lúc run active phải được giữ durable deferred.
+MUST
+FR-REG-005
+TransitionRun thực thi actor authorization, version CAS và lease epoch/owner/expiry fencing, ghi state + audit + outbox nguyên tử.
+MUST
+FR-REG-006
+Các trạng thái chính queued, preparing, coding, verifying, qa, quality_gate, pr_draft, completed; failed/cancelled terminal; blocked/retry_wait resumable.
+MUST
+FR-REG-007
+Các transition downstream chưa triển khai phải không bị báo như workflow đã chạy thành công chỉ nhờ contract map.
+MUST
+FR-REG-008
+VTX-3 lưu deferred intent; VTX-5 sở hữu promotion/admission và lease grant/renew.
+MUST
+FR-REG-009
+Tương thích migration VTX-2 trên DB populated; không DROP bảng hoặc dữ liệu bootstrap khi chưa có phương án bảo toàn được duyệt.
+MUST
+4.3 Outbox &amp; reliability
+ID
+Yêu cầu (shall)
+Ưu tiên
+FR-EVT-001
+Định tuyến consumer theo event_type/version; registry xử lý execution_intent.created.v1, không tự reconsume task_run.*.
+MUST
+FR-EVT-002
+Dispatcher hỗ trợ bounded claim, lease expiry, retry/backoff, dead letter và redrive có audit.
+MUST
+FR-EVT-003
+ACK của source event chỉ sau khi transaction consumer commit; crash giữa commit–ACK không sinh duplicate effect.
+MUST
+FR-EVT-004
+Delivery state phản ánh rõ consumer ownership và không vô tình ACK task_run.* chưa có downstream consumer.
+MUST
+FR-EVT-005
+Có thể scale ≥2 worker replicas dưới cùng consumer identity với concurrency-safe claim và receipt uniqueness.
+MUST
+FR-EVT-006
+Registry dispatcher có lifecycle độc lập với Temporal worker, hoặc có isolation vận hành tương đương.
+SHOULD
+4.4 Scheduler &amp; Worktree — VTX-4/5 [PROPOSED]
+ID
+Yêu cầu (shall)
+Ưu tiên
+FR-SCH-001
+Admit tối đa ba coding tasks đồng thời trong MVP; queue vượt hạn mức theo policy được công bố.
+MUST
+FR-SCH-002
+Cấp lease owner, monotonically increasing lease epoch, expiry và renew; stale worker không được ghi state hay áp dụng side effect có fence.
+MUST
+FR-SCH-003
+Worktree mỗi run được tạo, validate, cleanup riêng; không để hai run sử dụng nhầm workspace.
+MUST
+FR-SCH-004
+Recovery khi worker crash giữ ownership rõ ràng; cleanup không xóa worktree còn lease hợp lệ.
+MUST
+4.5 Coding, QA &amp; Quality Gate — VTX-6..12 [PROPOSED]
+ID
+Yêu cầu (shall)
+Ưu tiên
+FR-AGT-001
+Coding agent nhận scope, repo/worktree và test baseline, xuất artifacts/commit SHA/logs.
+MUST
+FR-AGT-002
+Agent host hỗ trợ handshake/version negotiation, cancellation, event streaming và cleanup process group.
+MUST
+FR-AGT-003
+Pi/OMP simulation phải được gắn nhãn là test double; không coi là real CLI integration.
+MUST
+FR-QA-001
+Independent QA chạy không đồng nhất với coding agent và đánh giá exact commit SHA cùng test evidence.
+MUST
+FR-QA-002
+Quality Gate PASS chỉ khi các điều kiện bắt buộc thỏa mãn, không dựa vào nhận xét LLM đơn lẻ.
+MUST
+FR-QA-003
+Nếu SHA đổi sau QA thì evidence cũ không đủ hiệu lực để gate PR.
+MUST
+FR-PR-001
+Chỉ tạo GitHub Draft PR sau gate PASS; human quyết định merge, platform không auto merge/deploy.
+MUST
+FR-ERR-001
+Retry failure trong giới hạn policy, không lặp vô hạn, có terminal failure và evidence.
+MUST
+4.6 Dashboard &amp; operator — VTX-13 [PROPOSED]
+ID
+Yêu cầu (shall)
+Ưu tiên
+FR-UI-001
+Hiển thị issue/run state, tiến độ stage, worker health và các dependency readiness được đo thực thay vì hardcode.
+MUST
+FR-UI-002
+Cung cấp run timeline, event/audit history, commit SHA, CI/QA evidence, PR link và error disposition.
+SHOULD
+FR-UI-003
+Mọi mutation operator cần authenticated principal và authorization; audit actor/reason/correlation.
+MUST
+FR-UI-004
+SSE/stream sử dụng Authorization header hoặc session phù hợp; không truyền token qua query string.
+MUST
+5. State model và guard
+State
+Loại
+Transition chính
+queued
+nonterminal
+begin → preparing
+preparing
+nonterminal
+advance → coding
+coding
+nonterminal
+advance → verifying
+verifying
+nonterminal
+advance → qa
+qa
+nonterminal
+advance → quality_gate
+quality_gate
+nonterminal
+PASS-gated advance → pr_draft
+pr_draft
+nonterminal
+complete → completed với completion policy
+blocked
+nonterminal
+resume → resume_state (operator)
+retry_wait
+nonterminal
+retry_due → resume_state (policy/scheduler)
+failed, cancelled, completed
+terminal
+Không có outgoing transition
+Mọi transition không được liệt kê bị từ chối. Các action block/fail/cancel chỉ dành cho actor được ủy quyền. Completion không đồng nghĩa merge hoặc deployment.
+6. Dữ liệu và hợp đồng tích hợp
+Object / Event
+Định danh và lưu ý
+jira_webhook_inbox
+Webhook event key và disposition, không giữ raw secret
+execution_intents
+Một business transition hợp lệ; foreign key nguồn task_run
+outbox_events
+Versioned payload; pending claim/retry/consumer ACK
+tasks
+Stable Jira site + issue ID; metadata issue key
+task_runs
+UUID run ID; intent uniqueness; version; state; lease fencing; commit SHA nullable
+task_run_events
+Append-only (run_id, version) unique, action/actor/correlation
+deferred_intents
+Valid re-entry chưa được admit; FIFO; unique intent ID
+inbox_consumptions
+Unique consumer_name + source_event_id
+execution_intent.created.v1
+VTX-2 → Registry
+task_run.created.v1
+Registry → Scheduler future
+task_run.state_changed.v1
+Registry → downstream consumers future
+7. External interfaces
+Interface
+Contract cần đáp ứng
+Jira Webhook
+HTTPS POST, request validation, configured auth via Gateway
+Jira REST
+Fetch current issue, status/project/site identity; bounded retry
+Registry API
+Read task/run/history and authorized mutation; typed errors 401/403/404/409
+Agent IPC
+JSON-RPC 2.0 over stdio; streaming events; cancellation
+GitHub API
+Repository/ref/commit checks, draft PR, CI run/required status
+Web
+REST + authenticated SSE / fetch stream; avoid misleading health claims
+8. Yêu cầu phi chức năng (NFR)
+ID
+Yêu cầu (shall)
+Ưu tiên
+NFR-SEC-001
+TLS cho ingress; secret redaction; least-privilege credentials; fail-closed gateway và internal API.
+MUST
+NFR-REL-001
+Không mất execution intent/outbox sau crash; replay an toàn, fault injection và migration rollback planning.
+MUST
+NFR-CON-001
+20+ concurrent writer cùng expected version tại ≥2 processes: đúng một commit và còn lại stale conflict.
+MUST
+NFR-AUD-001
+Logs/event history liên kết issue→intent→run→SHA→PR; không ghi token/raw webhook payload.
+MUST
+NFR-OPS-001
+Expose health/readiness theo dependency thực; outbox lag, retries, DLQ và active runs quan sát được.
+MUST
+NFR-PERF-001
+Latency/throughput SLO số cụ thể cần baseline measurement và phê duyệt; chưa tự đặt threshold.
+TBD
+NFR-AVAIL-001
+RPO/RTO, backup retention và SLA triển khai cần thống nhất trước production rollout.
+TBD
+NFR-MAINT-001
+Path-aware CI, deterministic migrations, sqlc generation and contract conformance ở exact SHA.
+MUST
+NFR-PRIV-001
+Không public dashboard nếu chủ dự án chọn network-private deployment; secrets nằm ngoài source.
+MUST
+9. Verification &amp; acceptance
+9.1 Evidence theo giai đoạn
+Giai đoạn
+Evidence tối thiểu
+VTX-14
+Single Go module, boundaries, Go/TS build/vet/test, compose, runtime IPC smoke, CI
+VTX-2
+Webhook auth/forgery, re-fetch, replay x3, 20 concurrent, rollback, gateway rotation (JT-01..JT-18)
+VTX-3
+TR-01..TR-25: run uniqueness, two-process CAS, stale lease, deferred, consumer replay, DLQ, upgrade populated DB
+VTX-4/5
+Lease ownership/fencing, worktree isolation, admission &lt;=3, crash/recovery
+VTX-6..12
+Baseline tests, real agent integration, independent QA SHA evidence, gate policy, Draft PR
+VTX-13
+Operational dashboard, authenticated controls, realtime event safety
+9.2 End-to-end acceptance scenarios [PROPOSED]
+E2E-01: Valid Ready-to-Dev Jira issue → one intent → queued run → admission → agent commit → independent QA PASS → Draft PR.
+E2E-02: Same webhook delivered ≥3 times → exactly one resulting run and no duplicate PR.
+E2E-03: Worker dies during coding; ownership/lease recovered without stale updates or duplicate side effects.
+E2E-04: QA detects failure → no Draft PR; retries bounded and fully audited.
+E2E-05: Commit SHA changes after QA → gate invalidates prior QA evidence.
+E2E-06: Two or more runnable issues compete for 3 task slots; admission invariant preserved.
+E2E-07: Operator cancel/resume and DLQ redrive follow permission policy and audit.
+10. Traceability / work packages
+Work package
+Phạm vi
+VTX-14
+Bootstrap Go + Next.js monorepo
+VTX-2 / AUTO-01
+Jira Event Intake &amp; Deduplication
+VTX-3 / AUTO-02
+Task Registry &amp; Durable State Machine
+VTX-4 / AUTO-03
+Git Worktree Lifecycle &amp; Lease
+VTX-5
+Scheduler / admission / lease allocation
+VTX-6
+Jira requirement/test baseline
+VTX-7
+Real Coding Agent runtime
+VTX-8
+Execution/build adapters
+VTX-9
+Independent QA
+VTX-10
+Deterministic Quality Gate
+VTX-11
+Retry/error orchestration
+VTX-12
+Draft PR lifecycle
+VTX-13
+Dashboard / pilot
+11. Open decisions / risks
+ID
+Chưa chốt hoặc rủi ro
+Hành động đề xuất
+OD-01
+Chính sách admin webhook của tenant Jira Free và credential mode thực tế
+Xác minh trực tiếp trên tenant
+OD-02
+Migration bootstrap tasks/task_events/agent_sessions không mất dữ liệu
+Inventory rows/FKs, compatibility plan, backup, reviewer approval
+OD-03
+ACK/outbox semantics nhiều consumer về sau
+Thiết kế per-consumer receipt/delivery contract
+OD-04
+Dispatcher lifecycle nếu Temporal không sẵn sàng
+Tách operational mode hoặc supervisor độc lập
+OD-05
+Gate semantics cho stage downstream chưa có thực thi
+Chỉ cho phép stage operational khi có evidence verified
+OD-06
+SLO, RPO/RTO, retention, security policy và quyền operator
+Thống nhất thông số đo được
+OD-07
+Pi/OMP real-runtime licensing/runtime dependencies
+Kết thúc VTX-7 với smoke thật
+OD-08
+Cụ thể hóa spec VTX-4..13 và ownership chi tiết
+Đối chiếu từng Jira issue trước implementation
+12. Definition of Done cho toàn bộ sản phẩm
+Mọi functional MUST có test traceable và evidence gắn exact commit SHA.
+Jira→PR end-to-end chạy với Jira/GitHub thật ở môi trường thử nghiệm có kiểm soát.
+Không có đường auto merge hoặc prod deploy.
+Không vượt admission limit; worker cũ không được ghi kết quả khi mất lease.
+Toàn bộ event/state transitions có audit và recovery sau crash.
+Security secrets, gateway, operator authorization và code sandbox được kiểm chứng.
+Bất kỳ acceptance chưa đạt phải ghi BLOCKED/NOT VERIFIED, không tự đánh dấu PASS.
+Ký duyệt SRS v1.0 sau khi xác nhận các open decisions.
+Phụ lục A — Glossary
+Thuật ngữ
+Định nghĩa
+Execution Intent
+Ý định xử lý tạo từ một Jira transition hợp lệ
+Task
+Danh tính nghiệp vụ ổn định gắn Jira issue ID
+Task Run
+Một lần xử lý một intent theo state machine
+Lease Epoch
+Generation/fencing token dùng ngăn worker cũ ghi dữ liệu
+Transactional Outbox
+Event được ghi cùng transaction với business data
+Inbox Receipt
+Bản ghi consumer đã xử lý source event để deduplicate
+Deferred Intent
+Intent hợp lệ đang chờ admission vì đã có active run
+Exact SHA
+Commit hash chính xác mà tests/QA/gate đã đánh giá
+Draft PR
+Pull Request chưa sẵn sàng merge tự động
+Phụ lục B — Tài liệu tham chiếu
+Jira epic: https://vtxsolution.atlassian.net/browse/VTX-1
+VTX-14 / SPEC-001: https://vtxsolution.atlassian.net/browse/VTX-14
+VTX-2 / SPEC-AUTO-01 v1.0 + Amendment 01: https://vtxsolution.atlassian.net/browse/VTX-2
+VTX-3 / SPEC-AUTO-02 v1.1: https://vtxsolution.atlassian.net/browse/VTX-3
+Repository: https://github.com/hvantoan/vtx
+VTX-3 Advice Updated v1.1 từ cuộc trao đổi dự án (nguồn bối cảnh, không chứng minh repository hiện trạng)

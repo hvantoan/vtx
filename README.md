@@ -63,6 +63,27 @@ make doctor
 
 ## 3. Quickstart & Local Development
 
+### One-command host bootstrap (fresh Debian/Ubuntu or Fedora)
+
+On a clean machine, one command installs Docker + dependencies, generates
+`.env` secrets and gateway certs, brings the whole compose stack up, runs
+migrations, and builds the host-side agent runtime (fnm/Node/pnpm/pi):
+
+```bash
+git clone https://github.com/hvantoan/vtx.git ~/vtx
+~/vtx/infra/scripts/setup-vtx-host.sh
+```
+
+- `--check` verifies an existing install (compose ps, `/health`, migration version, pi).
+- `--skip-agents` skips the Node/pi/agent-runtime phase (platform only).
+- Git auth for this private repo is a prerequisite of the clone step.
+- Run interactively and the script prompts for real Jira intake (base URL, site,
+  API email/token, project → start-status IDs → generated `jira.local.yaml`);
+  non-interactive runs keep fail-closed placeholders in `.env`.
+- Run `pi` once to `/login` your providers — OAuth cannot be automated.
+
+The manual steps below remain the reference for development machines.
+
 ### Step 1: Clone and Configure Environment
 ```bash
 cp .env.example .env

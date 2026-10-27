@@ -10,7 +10,7 @@ import (
 type SampleWorkflowInput struct {
 	TaskID      string   `json:"task_id"`
 	Steps       []string `json:"steps"`
-	FailStep    int      `json:"fail_step"`  // Optional step index to fail for testing retries
+	FailStep    int      `json:"fail_step"` // Optional step index to fail for testing retries
 	StepDelayMs int      `json:"step_delay_ms,omitempty"`
 }
 

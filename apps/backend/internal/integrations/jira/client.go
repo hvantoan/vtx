@@ -36,6 +36,7 @@ type FetchedIssue struct {
 	Key        string
 	ProjectKey string
 	StatusID   string
+	IssueContent
 }
 
 // IssueFetcher re-fetches an issue's authoritative identity. All failure
@@ -47,6 +48,7 @@ type IssueFetcher interface {
 }
 
 type Client struct {
+	acField  string
 	baseURL  *url.URL
 	email    string
 	apiToken string
@@ -149,7 +151,11 @@ func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, 
 	endpoint := *c.baseURL
 	endpoint.Path = endpoint.Path + "/rest/api/3/issue/" + url.PathEscape(issueID)
 	q := endpoint.Query()
-	q.Set("fields", "status,project")
+	fields := "status,project,summary,description,labels,priority,issuelinks,subtasks,fixVersions"
+	if c.acField != "" {
+		fields += "," + c.acField
+	}
+	q.Set("fields", fields)
 	endpoint.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
@@ -168,12 +174,26 @@ func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, 
 	if resp.StatusCode != http.StatusOK {
 		// 429 (any Retry-After value), 5xx, 4xx: all retryable — Jira
 		// redelivers; we never park the delivery sleeping.
-		return FetchedIssue{}, fmt.Errorf("%w: jira api status %d", ErrRetryable, resp.StatusCode)
+		return FetchedIssue{}, &HTTPError{Status: resp.StatusCode}
 	}
 
-	var body issueResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	var raw json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return FetchedIssue{}, fmt.Errorf("%w: decode issue response: %v", ErrRetryable, err)
+	}
+	var body issueResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return FetchedIssue{}, fmt.Errorf("%w: decode identity: %v", ErrRetryable, err)
+	}
+	var envelope struct {
+		Fields json.RawMessage `json:"fields"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return FetchedIssue{}, fmt.Errorf("%w: decode fields: %v", ErrRetryable, err)
+	}
+	content, err := contentFromFields(envelope.Fields, c.acField)
+	if err != nil {
+		return FetchedIssue{}, fmt.Errorf("%w: %v", ErrRetryable, err)
 	}
 	if body.ID == "" || body.ID != issueID {
 		return FetchedIssue{}, fmt.Errorf("%w: issue response id %q does not match requested %q", ErrRetryable, body.ID, issueID)
@@ -188,9 +208,10 @@ func (c *Client) FetchIssue(ctx context.Context, issueID string) (FetchedIssue, 
 		return FetchedIssue{}, fmt.Errorf("%w: issue response missing status.id", ErrRetryable)
 	}
 	return FetchedIssue{
-		ID:         body.ID,
-		Key:        body.Key,
-		ProjectKey: body.Fields.Project.Key,
-		StatusID:   body.Fields.Status.ID,
+		ID:           body.ID,
+		Key:          body.Key,
+		ProjectKey:   body.Fields.Project.Key,
+		StatusID:     body.Fields.Status.ID,
+		IssueContent: content,
 	}, nil
 }

@@ -13,10 +13,14 @@ import (
 
 	"github.com/vtx/platform/internal/application"
 	"github.com/vtx/platform/internal/config"
+	"github.com/vtx/platform/internal/gitops"
+	githubintegration "github.com/vtx/platform/internal/integrations/github"
 	"github.com/vtx/platform/internal/integrations/jira"
 	"github.com/vtx/platform/internal/observability"
 	"github.com/vtx/platform/internal/orchestration"
 	"github.com/vtx/platform/internal/persistence"
+	"github.com/vtx/platform/internal/qa"
+	"github.com/vtx/platform/internal/retry"
 	transporthttp "github.com/vtx/platform/internal/transport/http"
 )
 
@@ -122,6 +126,69 @@ func main() {
 	}
 	if receiptRec != nil {
 		server.WithJiraReceipts(receiptRec)
+	}
+	// VTX-3 registry API. Fail closed: no DB ⇒ no registry routes; missing
+	// actor tokens ⇒ startup error, never an unauthenticated surface.
+	if db != nil {
+		// App-hosted operator login. Sessions live in the same database; the
+		// single account is seeded/reset with `worker user set-password`.
+		server.WithAuth(application.NewAuthService(
+			persistence.NewPgAuthStore(db.Queries), application.SystemClock{},
+			cfg.SessionTTL, nil, logger,
+		))
+		if err := cfg.ValidateRegistry(); err != nil {
+			logger.Error("Invalid registry configuration", "error", err)
+			os.Exit(1)
+		}
+		registryStore := persistence.NewPgRegistryStore(db.Pool, db.Queries)
+		qualityGit := gitops.Runner{Git: gitops.Git{}, Layout: gitops.Layout{WorktreeRoot: cfg.WorktreeRoot}}
+		guards := persistence.EvidenceGuards{Head: qualityGit, WorktreeRoot: cfg.WorktreeRoot}
+		if err := registryStore.WithTransitionGuards(guards.GuardMap()); err != nil {
+			logger.Error("Invalid quality guards", "error", err)
+			os.Exit(1)
+		}
+		// QA runner is supplied by the VTX-7 runtime adapter. Until present,
+		// LaunchSession explicitly fails closed; no synthetic verdict exists.
+		server.WithQuality(&qa.Service{Store: persistence.NewPgQAStore(db.Pool, db.Queries), Git: qualityGit, Layout: gitops.Layout{WorktreeRoot: cfg.WorktreeRoot}}, persistence.NewPgGateService(db.Pool, db.Queries, guards), persistence.NewPgRetryStore(db.Pool, db.Queries), os.Getenv("QA_AGENT_AUTH_TOKEN"))
+		registryService := application.NewRegistryService(registryStore, cfg.RegistryConsumerName, application.SystemClock{}, logger).WithRetryPlanner(retry.DefaultPolicy())
+		server.WithRegistry(registryStore, registryService)
+		server.WithSSEEventReader(persistence.NewPgSSEEventReader(db.Queries))
+		server.WithOperator(application.NewOperatorService(
+			persistence.NewPgOperatorStore(db.Pool, db.Queries), application.SystemClock{},
+			cfg.WorkerHeartbeatInterval, cfg.WorkerStaleFactor,
+		))
+		if cfg.GitHubToken != "" {
+			if err := cfg.ValidateGitHub(); err != nil {
+				logger.Error("Invalid GitHub configuration", "error", err)
+				os.Exit(1)
+			}
+			githubClient, err := githubintegration.NewClient(cfg.GitHubAPIBaseURL, cfg.GitHubToken)
+			if err != nil {
+				logger.Error("Invalid GitHub configuration", "error", err)
+				os.Exit(1)
+			}
+			server.WithPullRequests(application.NewPRService(
+				persistence.NewPgPRStore(db.Pool, db.Queries), githubClient, registryService,
+				cfg.PRBaseBranch, cfg.GitHubRepoAllowlist,
+			))
+		}
+		// VTX-4 worktree surface. The API process owns HTTP reads/writes only;
+		// the periodic reconcile lives in the Temporal worker.
+		server.WithWorktree(application.NewWorktreeService(
+			persistence.NewPgWorktreeStore(db.Pool, db.Queries),
+			gitops.Runner{
+				Git: gitops.Git{},
+				Layout: gitops.Layout{
+					WorktreeRoot:   cfg.WorktreeRoot,
+					QuarantineRoot: cfg.WorktreeQuarantineRoot,
+					RepoCacheRoot:  cfg.RepoCacheRoot,
+				},
+			},
+			cfg.WorktreeOwner,
+			cfg.WorktreeLeaseTTL,
+			application.SystemClock{},
+			logger,
+		))
 	}
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 

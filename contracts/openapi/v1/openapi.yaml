@@ -6,8 +6,8 @@ info:
   license:
     name: Proprietary
 servers:
-  - url: http://localhost:49080
-    description: Local development server
+- url: http://localhost:49080
+  description: Local development server
 paths:
   /health:
     get:
@@ -25,7 +25,8 @@ paths:
   /ready:
     get:
       summary: Readiness Probe
-      description: Checks connectivity to critical dependencies (PostgreSQL, Temporal Server).
+      description: Checks connectivity to critical dependencies (PostgreSQL, Temporal
+        Server).
       operationId: getReady
       security: []
       responses:
@@ -44,7 +45,8 @@ paths:
   /api/v1/system/status:
     get:
       summary: System Status
-      description: Returns detailed platform runtime metrics, version, and component status.
+      description: Returns detailed platform runtime metrics, version, and component
+        status.
       operationId: getSystemStatus
       security: []
       responses:
@@ -56,21 +58,38 @@ paths:
                 $ref: '#/components/schemas/SystemStatusResponse'
   /api/v1/events:
     get:
-      summary: Real-Time SSE Stream
-      description: Establishes a Server-Sent Events stream for platform events, task updates, and system metrics. Requires Bearer authentication.
-      operationId: subscribeEvents
+      summary: SSE stream — adds run_id filter, Last-Event-ID resume, credential_in_query
+        guard
+      description: Accepts the operator's app session cookie or a policy registry
+        token, using the same read permissions as the operator console. Scheduler,
+        orchestrator, and gateway credentials do not grant stream access.
       security:
-        - BearerAuth: []
+      - OperatorSession: []
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: SSE stream opened successfully
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: Stream of newline-delimited SSE event frames
+          description: text/event-stream of PlatformEvent
         '401':
-          description: Missing or invalid authentication token
+          description: Missing/invalid credentials, or credential_in_query for requests
+            carrying token/access_token/auth/api_key query params (FR-UI-004).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Authenticated registry actor is not permitted to read the stream.
           content:
             application/json:
               schema:
@@ -78,7 +97,8 @@ paths:
   /api/v1/workers:
     get:
       summary: Worker Status
-      description: Returns the status of active Temporal workers and agent runtime instances.
+      description: Returns the status of active Temporal workers and agent runtime
+        instances.
       operationId: getWorkerStatus
       security: []
       responses:
@@ -88,26 +108,115 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkerStatusResponse'
+  /api/v1/auth/login:
+    post:
+      summary: Operator login — sets the HttpOnly session cookie
+      description: Exchanges the single seeded operator account's username/password
+        for an opaque session. Failures are rate limited per client address (5 per
+        15 minutes).
+      operationId: authLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthLoginRequest'
+      responses:
+        '200':
+          description: Authenticated. Set-Cookie carries vtx_session
+            (HttpOnly, Path=/, SameSite=Lax, Secure when the request is HTTPS).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '401':
+          description: invalid_credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: too_many_attempts; Retry-After reports the remaining window
+            in seconds (900 for a fresh window).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the current session and clear the cookie
+      operationId: authLogout
+      security:
+      - OperatorSession: []
+      responses:
+        '204':
+          description: Session revoked (or no session was presented)
+  /api/v1/auth/me:
+    get:
+      summary: Current session identity and expiry
+      operationId: authMe
+      security:
+      - OperatorSession: []
+      responses:
+        '200':
+          description: Session identity; a sliding session may have been extended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '401':
+          description: unauthorized (missing, revoked or expired session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/password:
+    post:
+      summary: Change the operator password and revoke every other session
+      operationId: authChangePassword
+      security:
+      - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Password changed; other sessions were revoked
+        '400':
+          description: weak_password (minimum 12 characters)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: unauthorized | invalid_credentials (wrong current password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/integrations/jira/webhooks:
     post:
       summary: Jira Webhook Intake
-      description: >
-        Receives Jira Cloud `jira:issue_updated` administrative webhook events,
-        deduplicates status transitions on
-        (jira_site_id, issue_id, changelog_id, target_status_id), and records
-        exactly one durable execution intent + outbox event per unique
-        transition whose `to` status ID is a configured start status for the
-        issue's project (per-project `start_status_ids` in the Jira intake
-        config — transitions to any other target are `invalid_transition`
-        receipts, never intents). Accepted events publish outbox payload
-        `execution_intent.created.v1`: event_id, intent_id, issue_id,
-        issue_key, jira_site_id, changelog_id, target_status_id, occurred_at,
-        occurred_at_source, correlation_id. Reachable only through the Nginx
-        webhook gateway, which injects the internal Bearer token after
-        validating the URL path secret. Public exposure is prohibited.
+      description: 'Receives Jira Cloud `jira:issue_updated` administrative webhook
+        events, deduplicates status transitions on (jira_site_id, issue_id, changelog_id,
+        target_status_id), and records exactly one durable execution intent + outbox
+        event per unique transition whose `to` status ID is a configured start status
+        for the issue''s project (per-project `start_status_ids` in the Jira intake
+        config — transitions to any other target are `invalid_transition` receipts,
+        never intents). Accepted events publish outbox payload `execution_intent.created.v1`:
+        event_id, intent_id, issue_id, issue_key, jira_site_id, changelog_id, target_status_id,
+        occurred_at, occurred_at_source, correlation_id. Reachable only through the
+        Nginx webhook gateway, which injects the internal Bearer token after validating
+        the URL path secret. Public exposure is prohibited.
+
+        '
       operationId: intakeJiraWebhook
       security:
-        - BearerAuth: []
+      - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -122,11 +231,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookResponse'
         '202':
-          description: >
-            Event acknowledged. Either accepted for processing, or ignored
-            without penalty (non-status event, out-of-scope project, stale
-            transition, missing changelog id). A 202 is always returned for
-            ignorable traffic so Jira Cloud never auto-disables the webhook.
+          description: 'Event acknowledged. Either accepted for processing, or ignored
+            without penalty (non-status event, out-of-scope project, stale transition,
+            missing changelog id). A 202 is always returned for ignorable traffic
+            so Jira Cloud never auto-disables the webhook.
+
+            '
           content:
             application/json:
               schema:
@@ -150,35 +260,897 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: >
-            Structurally valid but unprocessable: the transition target is not
-            a configured start status for the issue's project
-            (invalid_transition).
+          description: 'Structurally valid but unprocessable: the transition target
+            is not a configured start status for the issue''s project (invalid_transition).
+
+            '
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: >
-            Transient upstream failure (Jira API or database). No inbox row is
-            persisted; Jira's webhook redelivery performs the retry.
+          description: 'Transient upstream failure (Jira API or database). No inbox
+            row is persisted; Jira''s webhook redelivery performs the retry.
+
+            '
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/registry/runs/{run_id}:
+    get:
+      summary: Get a task run
+      description: 'Returns one task run. Callers authenticate with a registry actor
+        token (scheduler, orchestrator, operator, policy); the actor is derived from
+        the token, never from the request. The registry surface is internal: the production
+        gateway does not proxy it.
+
+        '
+      operationId: getRegistryRun
+      security:
+      - RegistryBearer: []
+      parameters:
+      - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryRun'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+        '404':
+          $ref: '#/components/responses/RegistryNotFound'
+  /api/v1/registry/runs/{run_id}/events:
+    get:
+      summary: List a run's audit events
+      description: 'Append-only audit trail in ascending version order. Pagination
+        is a cursor on `version` (never `created_at`): two events may share a timestamp,
+        and the version is the transition''s identity.
+
+        '
+      operationId: listRegistryRunEvents
+      security:
+      - RegistryBearer: []
+      parameters:
+      - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/AfterVersion'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RegistryRunEvent'
+                  next_cursor:
+                    type: integer
+                    description: Last version on this page; absent when the page is
+                      not full
+                    example: 4
+        '400':
+          $ref: '#/components/responses/RegistryBadRequest'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+  /api/v1/registry/runs/{run_id}/transitions:
+    post:
+      summary: Apply a run transition
+      description: 'The only mutation path for a run. The actor comes from the bearer
+        token; a body `actor` that differs from the authenticated principal is rejected
+        with 403 rather than ignored. Errors are typed: not_found 404; stale_version,
+        stale_lease, already_terminal, invalid_transition, conflict_active_run and
+        stage_not_operational 409; forbidden 403. `stage_not_operational` marks a
+        contract-valid hop whose downstream system does not exist yet in phase 1 —
+        the registry refuses instead of forging completion evidence.
+
+        '
+      operationId: transitionRegistryRun
+      security:
+      - RegistryBearer: []
+      parameters:
+      - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - expected_version
+              - action
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 0
+                  description: Optimistic concurrency token; must equal the current
+                    version
+                expected_lease_epoch:
+                  type: integer
+                  minimum: 0
+                  description: Required for lease-guarded actions (begin, advance,
+                    complete, schedule_retry)
+                action:
+                  type: string
+                  enum:
+                  - begin
+                  - advance
+                  - complete
+                  - block
+                  - resume
+                  - schedule_retry
+                  - retry_due
+                  - cancel
+                  - fail
+                reason:
+                  type: string
+                  maxLength: 500
+                  description: Sanitized (whitespace-flattened, bounded) before it
+                    reaches the audit row
+                metadata:
+                  type: object
+                  description: Opaque JSON stored on the audit row
+                actor:
+                  type: string
+                  description: 'Accepted only to reject impersonation: if present
+                    and not the authenticated principal, the request is 403.
+
+                    '
+            example:
+              expected_version: 0
+              action: block
+              reason: waiting on operator
+      responses:
+        '200':
+          description: The run after the transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryRun'
+        '400':
+          $ref: '#/components/responses/RegistryBadRequest'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+        '403':
+          description: The token's actor may not perform this action, or the body
+            claimed another actor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/RegistryNotFound'
+        '409':
+          description: 'Conflict: stale_version, stale_lease, already_terminal, invalid_transition,
+            conflict_active_run or stage_not_operational. Nothing is written when
+            this is returned.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/registry/tasks/{site_id}/{issue_id}:
+    get:
+      summary: Get a registry task by Jira identity
+      description: Resolves (jira_site_id, jira_issue_id) to the registry task.
+      operationId: getRegistryTask
+      security:
+      - RegistryBearer: []
+      parameters:
+      - $ref: '#/components/parameters/SiteId'
+      - $ref: '#/components/parameters/IssueId'
+      responses:
+        '200':
+          description: The task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryTask'
+        '401':
+          $ref: '#/components/responses/RegistryUnauthorized'
+        '404':
+          $ref: '#/components/responses/RegistryNotFound'
+  /api/v1/registry/runs/{run_id}/pull_request:
+    get:
+      summary: PR record for a run (404 when none)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Pull request record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullRequest'
+        '404':
+          description: No PR for this run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/pull_requests:
+    get:
+      summary: List draft PRs for the ops dashboard
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - requested
+          - open
+          - closed
+          - merged
+          - failed
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 100
+      responses:
+        '200':
+          description: Page of PR rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PullRequest'
+                  next_cursor:
+                    type:
+                    - string
+                    - 'null'
+  /api/v1/pull_requests/{run_id}/sync:
+    post:
+      summary: Pull fresh PR status + CI rollup from GitHub (rate-limited 60s/run)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Synced record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullRequest'
+        '409':
+          description: sync_throttled | run not found in pr_draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/operator/overview:
+    get:
+      summary: Dashboard histogram + admission + outbox + worker health summary
+      security:
+      - OperatorSession: []
+      - RegistryBearer: []
+      responses:
+        '200':
+          description: Live overview, all fields measured from rows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorOverview'
+  /api/v1/operator/runs:
+    get:
+      summary: Cursor-paginated run list joined to task (issue_key), pr_url, commit_sha
+      security:
+      - OperatorSession: []
+      - RegistryBearer: []
+      parameters:
+      - name: state
+        in: query
+        schema:
+          type: string
+          enum:
+          - queued
+          - preparing
+          - coding
+          - verifying
+          - qa
+          - quality_gate
+          - pr_draft
+          - completed
+          - blocked
+          - retry_wait
+          - failed
+          - cancelled
+      - name: issue_key
+        in: query
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 100
+      responses:
+        '200':
+          description: Page of run list rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RunListItem'
+                  next_cursor:
+                    type:
+                    - string
+                    - 'null'
+  /api/v1/operator/runs/{run_id}:
+    get:
+      summary: RunDetailView aggregate — run + worktree + PR + gate verdict + last
+        error
+      security:
+      - OperatorSession: []
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Aggregated run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDetailView'
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/operator/outbox:
+    get:
+      summary: Per-event-type outbox lag counters
+      security:
+      - OperatorSession: []
+      - RegistryBearer: []
+      responses:
+        '200':
+          description: Pending/retrying/dead-lettered counts + oldest age per event_type
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/OutboxTypeCounters'
+  /api/v1/operator/outbox/dlq:
+    get:
+      summary: Dead-lettered outbox events
+      security:
+      - OperatorSession: []
+      - RegistryBearer: []
+      parameters:
+      - name: after
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 100
+      responses:
+        '200':
+          description: DLQ rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DlqEvent'
+                  next_cursor:
+                    type:
+                    - string
+                    - 'null'
+  /api/v1/operator/outbox/dlq/{outbox_id}/redrive:
+    post:
+      summary: Redrive a dead-lettered event — operator only, audited
+      security:
+      - OperatorSession: []
+      parameters:
+      - name: outbox_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+      responses:
+        '202':
+          description: Redrive accepted (event re-queued, audit row written)
+        '401':
+          description: Unauthenticated
+        '403':
+          description: Actor is not operator
+        '409':
+          description: not_dead_lettered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/operator/workers:
+    get:
+      summary: Worker heartbeats + computed up/down status, merged with Temporal workers
+      security:
+      - OperatorSession: []
+      - RegistryBearer: []
+      responses:
+        '200':
+          description: Worker rows; status computed as beat < 3x interval
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkerStatus'
+  # -------------------------------------------------------------------------
+  # /internal/v1 — quality pipeline surface (VTX-9/10/11). Actor tokens are the
+  # same RegistryBearer credentials; the QA verdict POST uses a dedicated
+  # qa-agent token, never a transition actor.
+  # -------------------------------------------------------------------------
+  /internal/v1/runs/{run_id}/qa/session:
+    post:
+      summary: Launch an independent QA session (orchestrator only, idempotent on run+attempt)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - expected_version
+              - lease_owner
+              - lease_epoch
+              properties:
+                expected_version:
+                  type: integer
+                lease_owner:
+                  type: string
+                lease_epoch:
+                  type: integer
+      responses:
+        '200':
+          description: QA session record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QASession'
+        '401':
+          description: Unauthenticated
+        '403':
+          description: Actor is not orchestrator
+        '409':
+          description: Stale version/lease or run not in QA stage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/runs/{run_id}/qa/verdict:
+    post:
+      summary: Submit QA verdict — dedicated qa-agent token only (never a transition actor)
+      security:
+      - QAAgentBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - commit_sha
+              - verdict
+              - findings
+              - evidence_ids
+              - qa_session_id
+              - lease_owner
+              - lease_epoch
+              properties:
+                commit_sha:
+                  type: string
+                verdict:
+                  $ref: '#/components/schemas/QAVerdict'
+                findings:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/QAFinding'
+                evidence_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                qa_session_id:
+                  type: string
+                lease_owner:
+                  type: string
+                lease_epoch:
+                  type: integer
+      responses:
+        '200':
+          description: Recorded verdict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QAVerdictRecord'
+        '401':
+          description: Unauthenticated
+        '409':
+          description: Verdict conflict, SHA mismatch, session not unique, or run not in QA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      summary: Read the verdict bound to an exact commit SHA (operator/orchestrator)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: sha
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Verdict for the exact SHA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QAVerdictRecord'
+        '400':
+          description: Missing sha query parameter
+        '404':
+          description: No verdict for that SHA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/runs/{run_id}/evidence:
+    get:
+      summary: List evidence artifacts bound to an exact commit SHA (dashboard evidence, FR-UI-002)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: sha
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Evidence artifacts for the SHA
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EvidenceArtifact'
+        '400':
+          description: Missing sha query parameter
+  /internal/v1/runs/{run_id}/gate/evaluate:
+    post:
+      summary: Standalone gate evaluation — persists a decision row without advancing the run (orchestrator/policy)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - lease_epoch
+              properties:
+                lease_epoch:
+                  type: integer
+      responses:
+        '200':
+          description: Gate decision (pass or fail with conditions/blocking_reasons)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GateDecision'
+        '403':
+          description: Actor is not orchestrator or policy
+  /internal/v1/runs/{run_id}/gate/decision:
+    get:
+      summary: Latest gate decision for an exact SHA (operator/orchestrator)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: sha
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Latest gate decision for the SHA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GateDecision'
+        '400':
+          description: Missing sha query parameter
+        '404':
+          description: No decision recorded for that SHA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /internal/v1/runs/{run_id}/gate/history:
+    get:
+      summary: All gate decisions for the run, newest first (operator audit view)
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Decision history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GateDecision'
+        '403':
+          description: Actor is not operator
+  /internal/v1/outbox/dlq/{outbox_id}/redrive:
+    post:
+      summary: Internal per-consumer DLQ redrive — audited in delivery_redrives (VTX-11)
+      description: |
+        Distinct from POST /api/v1/operator/outbox/dlq/{outbox_id}/redrive, which is
+        the contract operator surface writing operator_audit_log. This internal
+        variant records a delivery_redrives row scoped to a dispatcher consumer.
+      security:
+      - RegistryBearer: []
+      parameters:
+      - name: outbox_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - consumer_name
+              - reason
+              properties:
+                consumer_name:
+                  type: string
+                reason:
+                  type: string
+                correlation_id:
+                  type: string
+      responses:
+        '200':
+          description: Redrive outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redriven:
+                    type: boolean
+        '403':
+          description: Actor is not operator
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT or API Token
+    RegistryBearer:
+      type: http
+      scheme: bearer
+      description: 'One of the three machine actor tokens (scheduler, orchestrator,
+        policy). The actor is derived from the token, never from the request body.
+        Human operator access uses an app session, not a bearer token.
+
+        '
+    OperatorSession:
+      type: apiKey
+      in: cookie
+      name: vtx_session
+      description: Opaque HttpOnly session cookie issued by POST /api/v1/auth/login.
+        Sessions slide at most once per hour and are revoked on logout or password
+        change. Not a credential that automation should hold; machines use their
+        actor bearer token.
+    QAAgentBearer:
+      type: http
+      scheme: bearer
+      description: Dedicated QA-agent credential for POST /internal/v1/runs/{run_id}/qa/verdict.
+        It is deliberately not a registry transition actor, so a stolen QA token cannot
+        drive pipeline state changes.
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AfterVersion:
+      name: after_version
+      in: query
+      required: false
+      description: Exclusive cursor; only events with version greater than this are
+        returned.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    SiteId:
+      name: site_id
+      in: path
+      required: true
+      description: Jira site ID (e.g. vtxsolution.atlassian.net)
+      schema:
+        type: string
+    IssueId:
+      name: issue_id
+      in: path
+      required: true
+      description: Authoritative Jira issue.id, not the issue key
+      schema:
+        type: string
+  responses:
+    RegistryBadRequest:
+      description: Malformed request (invalid JSON, unknown action, bad cursor)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RegistryUnauthorized:
+      description: Missing or unknown registry actor token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RegistryNotFound:
+      description: Registry resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
     HealthResponse:
       type: object
       required:
-        - status
-        - timestamp
-        - uptime_seconds
+      - status
+      - timestamp
+      - uptime_seconds
       properties:
         status:
           type: string
@@ -192,29 +1164,34 @@ components:
     DependencyCheck:
       type: object
       required:
-        - status
-        - latency_ms
+      - status
+      - latency_ms
       properties:
         status:
           type: string
-          enum: [up, down, degraded]
+          enum:
+          - up
+          - down
+          - degraded
         latency_ms:
           type: number
           example: 2.4
         error:
           type:
-            - string
-            - "null"
+          - string
+          - 'null'
     ReadyResponse:
       type: object
       required:
-        - status
-        - timestamp
-        - dependencies
+      - status
+      - timestamp
+      - dependencies
       properties:
         status:
           type: string
-          enum: [ready, not_ready]
+          enum:
+          - ready
+          - not_ready
         timestamp:
           type: string
           format: date-time
@@ -228,11 +1205,11 @@ components:
     SystemStatusResponse:
       type: object
       required:
-        - version
-        - commit
-        - environment
-        - go_version
-        - goroutines
+      - version
+      - commit
+      - environment
+      - go_version
+      - goroutines
       properties:
         version:
           type: string
@@ -255,8 +1232,8 @@ components:
     WorkerStatusResponse:
       type: object
       required:
-        - status
-        - workers
+      - status
+      - workers
       properties:
         status:
           type: string
@@ -266,9 +1243,9 @@ components:
           items:
             type: object
             required:
-              - id
-              - queue
-              - status
+            - id
+            - queue
+            - status
             properties:
               id:
                 type: string
@@ -278,15 +1255,18 @@ components:
                 example: vtx-task-queue
               status:
                 type: string
-                enum: [running, idle, stopped]
+                enum:
+                - running
+                - idle
+                - stopped
               active_workflows:
                 type: integer
                 example: 0
     ErrorResponse:
       type: object
       required:
-        - error
-        - message
+      - error
+      - message
       properties:
         error:
           type: string
@@ -294,6 +1274,41 @@ components:
         message:
           type: string
           example: Invalid or missing authorization header
+    AuthLoginRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+    AuthSession:
+      type: object
+      required:
+      - username
+      - expires_at
+      properties:
+        username:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    ChangePasswordRequest:
+      type: object
+      required:
+      - current_password
+      - new_password
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+          minLength: 12
     JiraWebhookEnvelope:
       type: object
       description: Jira Cloud administrative webhook payload (jira:issue_updated)
@@ -309,7 +1324,7 @@ components:
           properties:
             id:
               type: string
-              example: "10011"
+              example: '10011'
             key:
               type: string
               example: VTX-2
@@ -329,7 +1344,7 @@ components:
           properties:
             id:
               type: string
-              example: "20001"
+              example: '20001'
             items:
               type: array
               items:
@@ -345,8 +1360,8 @@ components:
     WebhookResponse:
       type: object
       required:
-        - request_id
-        - disposition
+      - request_id
+      - disposition
       properties:
         request_id:
           type: string
@@ -354,10 +1369,589 @@ components:
           example: b3f9c2a1d4e5f607
         disposition:
           type: string
-          enum: [accepted, duplicate, ignored_stale, ignored_scope, invalid_transition]
+          enum:
+          - accepted
+          - duplicate
+          - ignored_stale
+          - ignored_scope
+          - invalid_transition
           example: accepted
         intent_id:
           type: string
           format: uuid
           description: Present for accepted and duplicate dispositions
           example: 3f6a2c94-0d1b-4e58-9a7c-12df34ab56cd
+    RegistryTask:
+      type: object
+      required:
+      - task_id
+      - jira_site_id
+      - jira_issue_id
+      - jira_issue_key
+      - project_key
+      - created_at
+      - updated_at
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        jira_site_id:
+          type: string
+        jira_issue_id:
+          type: string
+        jira_issue_key:
+          type: string
+          example: VTX-3
+        project_key:
+          type: string
+          example: VTX
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RegistryRun:
+      type: object
+      required:
+      - run_id
+      - task_id
+      - state
+      - version
+      - attempt
+      - lease_epoch
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+          - queued
+          - preparing
+          - coding
+          - verifying
+          - qa
+          - quality_gate
+          - pr_draft
+          - completed
+          - blocked
+          - retry_wait
+          - failed
+          - cancelled
+        version:
+          type: integer
+          format: int64
+          description: Optimistic concurrency token
+        attempt:
+          type: integer
+        resume_state:
+          type:
+          - string
+          - 'null'
+        retry_due_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        commit_sha:
+          type: string
+        branch:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        lease_owner:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+        lease_expires_at:
+          type: string
+          format: date-time
+        correlation_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    RegistryRunEvent:
+      type: object
+      required:
+      - previous_state
+      - current_state
+      - action
+      - actor
+      - actor_type
+      - version
+      - created_at
+      properties:
+        previous_state:
+          type: string
+          description: Empty string on the version-0 creation row
+        current_state:
+          type: string
+        action:
+          type: string
+        actor:
+          type: string
+        actor_type:
+          type: string
+          enum:
+          - system
+          - human
+        version:
+          type: integer
+          format: int64
+          description: Audit version; equals the run version after the transition
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+    PullRequest:
+      type: object
+      properties:
+        pull_request_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        repo_owner:
+          type: string
+        repo_name:
+          type: string
+        pr_number:
+          type:
+          - integer
+          - 'null'
+        pr_url:
+          type:
+          - string
+          - 'null'
+        head_branch:
+          type: string
+        head_sha:
+          type: string
+        base_branch:
+          type: string
+        draft:
+          type: boolean
+          description: always true for platform-created PRs
+        status:
+          type: string
+          enum:
+          - requested
+          - open
+          - closed
+          - merged
+          - failed
+        ci_status:
+          type:
+          - string
+          - 'null'
+        error_code:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        last_synced_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    OperatorOverview:
+      type: object
+      properties:
+        runs_by_state:
+          type: object
+          additionalProperties:
+            type: integer
+        deferred_count:
+          type: integer
+        admission:
+          type: object
+          properties:
+            max:
+              type: integer
+              enum:
+              - 3
+            active:
+              type: integer
+              description: live slot count; >3 would be an invariant bug
+        outbox:
+          type: object
+          properties:
+            pending:
+              type: integer
+            retrying:
+              type: integer
+            dead_lettered:
+              type: integer
+            oldest_age_seconds:
+              type: integer
+        workers:
+          type: object
+          properties:
+            up:
+              type: integer
+            down:
+              type: integer
+    RunListItem:
+      type: object
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        issue_key:
+          type: string
+        state:
+          type: string
+        attempt:
+          type: integer
+        commit_sha:
+          type:
+          - string
+          - 'null'
+        pr_url:
+          type:
+          - string
+          - 'null'
+        lease_owner:
+          type:
+          - string
+          - 'null'
+        error_code:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RunDetailView:
+      type: object
+      properties:
+        run:
+          $ref: '#/components/schemas/RunListItem'
+        worktree:
+          type:
+          - object
+          - 'null'
+          properties:
+            path:
+              type: string
+            branch:
+              type: string
+            base_sha:
+              type: string
+            status:
+              type: string
+        pull_request:
+          anyOf:
+          - $ref: '#/components/schemas/PullRequest'
+          - type: 'null'
+        gate_decision:
+          type:
+          - object
+          - 'null'
+          properties:
+            decision:
+              type: string
+              enum:
+              - pass
+              - fail
+            subject_commit_sha:
+              type: string
+            decided_at:
+              type: string
+              format: date-time
+        last_error:
+          type:
+          - object
+          - 'null'
+          properties:
+            error_code:
+              type: string
+            error_message:
+              type: string
+    OutboxTypeCounters:
+      type: object
+      properties:
+        pending:
+          type: integer
+        retrying:
+          type: integer
+        dead_lettered:
+          type: integer
+        oldest_age_seconds:
+          type: integer
+    DlqEvent:
+      type: object
+      properties:
+        outbox_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        dead_letter_reason:
+          type: string
+        attempt:
+          type: integer
+        dead_lettered_at:
+          type: string
+          format: date-time
+        redrive_count:
+          type: integer
+    WorkerStatus:
+      type: object
+      properties:
+        worker_id:
+          type: string
+        worker_kind:
+          type: string
+          enum:
+          - scheduler
+          - dispatcher
+          - agent_host
+          - sweeper
+        run_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        last_beat_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - up
+          - down
+          description: 'computed: beat < 3x interval'
+        metadata:
+          type: object
+    # -----------------------------------------------------------------------
+    # /internal/v1 quality pipeline schemas (VTX-9/10/11)
+    # -----------------------------------------------------------------------
+    QASession:
+      type: object
+      required:
+      - session_id
+      - commit_sha
+      - coding_session_id
+      properties:
+        session_id:
+          type: string
+        commit_sha:
+          type: string
+          description: Exact SHA the QA session is pinned to (FR-QA-003)
+        coding_session_id:
+          type: string
+          description: ID of the coding session under review — must differ from
+            session_id (independence, FR-QA-001)
+    QAVerdict:
+      type: string
+      enum:
+      - pass
+      - fail
+      - inconclusive
+    QAFinding:
+      type: object
+      required:
+      - severity
+      - category
+      - summary
+      properties:
+        severity:
+          type: string
+          enum:
+          - blocker
+          - major
+          - minor
+          - info
+        category:
+          type: string
+        summary:
+          type: string
+        path:
+          type: string
+        line:
+          type: integer
+        evidence_artifact_id:
+          type: string
+          format: uuid
+    QAVerdictRecord:
+      type: object
+      required:
+      - verdict_id
+      - run_id
+      - attempt
+      - commit_sha
+      - verdict
+      - findings
+      - qa_session_id
+      - coding_session_id
+      - qa_agent_identity
+      - evidence_ids
+      - evaluated_at
+      properties:
+        verdict_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+        commit_sha:
+          type: string
+        verdict:
+          $ref: '#/components/schemas/QAVerdict'
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/QAFinding'
+        qa_session_id:
+          type: string
+        coding_session_id:
+          type: string
+        qa_agent_identity:
+          type: string
+        evidence_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        evaluated_at:
+          type: string
+          format: date-time
+    EvidenceArtifact:
+      type: object
+      required:
+      - artifact_id
+      - run_id
+      - task_id
+      - attempt
+      - kind
+      - uri
+      - sha256
+      - commit_sha
+      - producer
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+        kind:
+          type: string
+          enum:
+          - test_results
+          - build_log
+          - lint_report
+          - coverage
+          - qa_review
+          - qa_test_run
+          - ci_status
+          - diff_summary
+        uri:
+          type: string
+          description: Fenced artifact URI inside the run evidence area
+        sha256:
+          type: string
+        commit_sha:
+          type: string
+          description: Exact subject SHA the evidence is bound to
+        producer:
+          type: string
+          enum:
+          - coding_agent
+          - verifier
+          - qa_agent
+          - github_ci
+          - system
+        producer_session_id:
+          type: string
+        metadata:
+          type: object
+    GateDecision:
+      type: object
+      required:
+      - decision_id
+      - run_id
+      - attempt
+      - subject_commit_sha
+      - verified_head_sha
+      - policy_name
+      - policy_version
+      - decision
+      - conditions
+      - blocking_reasons
+      - lease_epoch
+      - evaluated_at
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+        subject_commit_sha:
+          type: string
+        verified_head_sha:
+          type: string
+        policy_name:
+          type: string
+        policy_version:
+          type: string
+        decision:
+          type: string
+          enum:
+          - pass
+          - fail
+        conditions:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              passed:
+                type: boolean
+              detail:
+                type: string
+        blocking_reasons:
+          type: array
+          items:
+            type: string
+        lease_epoch:
+          type: integer
+        evaluated_at:
+          type: string
+          format: date-time

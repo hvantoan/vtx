@@ -36,7 +36,7 @@ resolve_ports() {
 SECRET="${WEBHOOK_PATH_SECRET_PRIMARY:?missing in .env}"
 SECONDARY="secondaryrot9e2b4a1c8d7f3e6b5a9c0d2e4f6a8b1c3d5e7f9a0b"
 GWT="${GATEWAY_INTERNAL_AUTH_TOKEN:?missing in .env}"
-PSQL=(docker exec vtx-postgres psql -U vtx_user -d vtx_platform -tAc)
+PSQL=("${COMPOSE[@]}" exec -T postgres psql -U vtx_user -d vtx_platform -tAc)
 
 PASS=0; FAIL=0; FAILED_CASES=()
 
@@ -122,8 +122,8 @@ expect_status "JT-04" "no Authorization header -> 401" "401" "$S"
 S=$(curl -sk -o /tmp/jt_resp.json -w '%{http_code}' -X POST \
     "http://localhost:${API_PORT}/api/v1/integrations/jira/webhooks" \
     -H 'Content-Type: application/json' \
-    -H "Authorization: Bearer ${API_AUTH_TOKEN:-vtx-dev-secret-token-change-in-production}" -d '{}')
-expect_status "JT-05" "public API_AUTH_TOKEN rejected on webhook route -> 401" "401" "$S"
+    -H "Authorization: Bearer legacy-public-api-token" -d '{}')
+expect_status "JT-05" "legacy public API bearer token rejected on webhook route -> 401" "401" "$S"
 
 echo "--- Ingress controls (JT-06, JT-07) -------------------------------"
 # Forge a gateway-style request: correct path secret + injected bearer.

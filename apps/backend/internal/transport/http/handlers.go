@@ -32,6 +32,22 @@ type Server struct {
 	sseMu        sync.RWMutex
 	jiraWebhook  JiraWebhookProcessor
 	jiraReceipts ReceiptRecorder
+	// VTX-3 registry surface. Nil until WithRegistry is called.
+	registryReader      RegistryReader
+	registryTransitions RegistryTransitioner
+	// VTX-4 worktree surface. Nil until WithWorktree is called.
+	worktree WorktreeService
+	// VTX-9/10/11 quality surfaces. Nil until WithQuality is called.
+	qa       QAService
+	gate     GateService
+	redriver DeliveryRedriver
+	qaToken  string
+	// VTX-12/13 operator and draft-PR surfaces.
+	pullRequests PullRequestService
+	operator     OperatorService
+	sseEvents    SSEEventReader
+	// App-hosted operator login. Nil until WithAuth is called.
+	auth AuthService
 }
 
 func NewServer(cfg *config.Config, logger *slog.Logger, db DependencyChecker, temporal DependencyChecker) *Server {
@@ -263,8 +279,20 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	sendSSEEvent(w, flusher, initialEvent)
 
-	heartbeatTicker := time.NewTicker(5 * time.Second)
+	heartbeatTicker := time.NewTicker(15 * time.Second)
 	defer heartbeatTicker.Stop()
+	pollTicker := time.NewTicker(2 * time.Second)
+	defer pollTicker.Stop()
+	cursor := r.Header.Get("Last-Event-ID")
+	if cursor == "" {
+		cursor = r.URL.Query().Get("last_event_id")
+	}
+	runID := r.URL.Query().Get("run_id")
+	if next, err := s.sendPersistedSSE(r.Context(), w, flusher, cursor, runID); err != nil {
+		s.logger.Error("initial SSE tail failed", "error", err)
+	} else {
+		cursor = next
+	}
 
 	for {
 		select {
@@ -272,6 +300,13 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case event := <-eventCh:
 			sendSSEEvent(w, flusher, event)
+		case <-pollTicker.C:
+			next, err := s.sendPersistedSSE(r.Context(), w, flusher, cursor, runID)
+			if err != nil {
+				s.logger.Error("SSE tail failed", "error", err)
+				continue
+			}
+			cursor = next
 		case t := <-heartbeatTicker.C:
 			hbEvent := domain.PlatformEvent{
 				ID:        fmt.Sprintf("hb-%d", t.UnixNano()),
@@ -301,6 +336,12 @@ func (s *Server) BroadcastEvent(event domain.PlatformEvent) {
 
 func sendSSEEvent(w http.ResponseWriter, flusher http.Flusher, event domain.PlatformEvent) {
 	dataBytes, _ := json.Marshal(event)
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, string(dataBytes))
+	// Heartbeats are transport keepalives, not durable outbox cursors. Leaving
+	// their id blank preserves Last-Event-ID as the last replayable outbox UUID.
+	if event.Type == "system.heartbeat" {
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, string(dataBytes))
+	} else {
+		fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", event.ID, event.Type, string(dataBytes))
+	}
 	flusher.Flush()
 }

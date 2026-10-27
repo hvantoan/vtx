@@ -71,9 +71,10 @@ var testReceivedAt = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
+	// These tests delete rows; they must never touch the application database.
+	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://vtx_user:vtx_password@localhost:49432/vtx_platform?sslmode=disable"
+		t.Skip("TEST_DATABASE_URL is not set — skipping DB-backed service tests")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

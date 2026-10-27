@@ -12,20 +12,24 @@ ERRORS=0
 
 echo "🔍 Running VTX Monorepo Boundary Checks..."
 
+# var/ is runtime scratch (ignored by git): run worktrees and repo caches hold
+# their own module copies and must not be mistaken for repository structure.
+SKIP_RUNTIME=(-not -path "*/.git/*" -not -path "./var/*")
+
 # 1. Verify NO go.work or go.work.sum anywhere in repo (BS-19, AC-1)
-if find . -name "go.work*" -not -path "*/.git/*" | grep -q .; then
+if find . -name "go.work*" "${SKIP_RUNTIME[@]}" | grep -q .; then
     echo "❌ VIOLATION: Found forbidden 'go.work' file(s):"
-    find . -name "go.work*" -not -path "*/.git/*"
+    find . -name "go.work*" "${SKIP_RUNTIME[@]}"
     ERRORS=$((ERRORS + 1))
 else
     echo "  ✅ Check 1: No go.work files exist in repository."
 fi
 
 # 2. Verify EXACTLY ONE go.mod at apps/backend/go.mod (AC-1)
-GO_MOD_COUNT=$(find . -name "go.mod" -not -path "*/.git/*" | wc -l)
+GO_MOD_COUNT=$(find . -name "go.mod" "${SKIP_RUNTIME[@]}" | wc -l)
 if [ "$GO_MOD_COUNT" -ne 1 ]; then
     echo "❌ VIOLATION: Expected exactly 1 go.mod, found $GO_MOD_COUNT:"
-    find . -name "go.mod" -not -path "*/.git/*"
+    find . -name "go.mod" "${SKIP_RUNTIME[@]}"
     ERRORS=$((ERRORS + 1))
 else
     if [ ! -f "apps/backend/go.mod" ]; then
@@ -87,6 +91,20 @@ if [ -n "$SUSPICIOUS_SECRETS" ]; then
     ERRORS=$((ERRORS + 1))
 else
     echo "  ✅ Check 6: Secret scan passed (no high-entropy API tokens or private keys found)."
+fi
+
+# 7. VTX-3 registry layers must not reach into orchestration, Git, or Docker
+# (SPEC-AUTO-02 §1/TR-16). Package-level check: the binary may import Temporal
+# for the API server, but the registry code paths may not.
+REGISTRY_PKGS=("./internal/domain" "./internal/application" "./internal/transport/http" "./internal/persistence")
+REGISTRY_DEPS=$(go -C apps/backend list -deps "${REGISTRY_PKGS[@]}" 2>/dev/null \
+    | grep -E 'go\.temporal\.io|github\.com/go-git|github\.com/docker|internal/orchestration' || true)
+if [ -n "$REGISTRY_DEPS" ]; then
+    echo "❌ VIOLATION: registry layers depend on forbidden packages:"
+    echo "$REGISTRY_DEPS"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "  ✅ Check 7: Registry layers are free of Temporal, Git, Docker and orchestration deps."
 fi
 
 if [ "$ERRORS" -gt 0 ]; then

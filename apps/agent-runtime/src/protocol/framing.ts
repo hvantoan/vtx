@@ -23,6 +23,10 @@ export class StdioChannel {
     });
   }
 
+  onClose(callback: () => void): void {
+    this.rl.on("close", callback);
+  }
+
   sendResponse(response: JsonRpcResponse): void {
     this.output.write(JSON.stringify(response) + "\n");
   }
