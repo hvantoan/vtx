@@ -217,7 +217,7 @@ func TestSessionSlidesAtMostOncePerHour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.touches != 0 || !got.ExpiresAt.Equal(result.ExpiresAt) {
+	if store.touches != 0 || got.Renewed || !got.ExpiresAt.Equal(result.ExpiresAt) {
 		t.Fatalf("touch within an hour must not write: touches=%d expires=%s", store.touches, got.ExpiresAt)
 	}
 
@@ -229,8 +229,47 @@ func TestSessionSlidesAtMostOncePerHour(t *testing.T) {
 	if store.touches != 1 {
 		t.Fatalf("touches = %d, want 1", store.touches)
 	}
-	if !got.ExpiresAt.Equal(clock.now.Add(SessionTTL)) {
+	if !got.Renewed || !got.ExpiresAt.Equal(clock.now.Add(SessionTTL)) {
 		t.Fatalf("expires = %s, want %s", got.ExpiresAt, clock.now.Add(SessionTTL))
+	}
+	got, err = svc.Authenticate(context.Background(), result.Token)
+	if err != nil || got.Renewed || store.touches != 1 {
+		t.Fatalf("repeat authenticate: renewed=%v touches=%d err=%v", got.Renewed, store.touches, err)
+	}
+}
+
+type failedTouchStore struct {
+	AuthStore
+	err error
+}
+
+func (s failedTouchStore) TouchSession(context.Context, string, time.Time) (bool, error) {
+	return false, s.err
+}
+
+func TestFailedSessionExtensionDoesNotRenewCookie(t *testing.T) {
+	svc, store, clock := newTestAuthService(t)
+	if _, err := svc.SetPassword(context.Background(), "operator", testPassword); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Login(context.Background(), "operator", testPassword, "10.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.now = clock.now.Add(2 * time.Hour)
+	for _, touchErr := range []error{errors.New("store unavailable"), nil} {
+		svc.store = failedTouchStore{AuthStore: store, err: touchErr}
+		session, err := svc.Authenticate(context.Background(), result.Token)
+		if session.Renewed {
+			t.Fatal("failed extension must not renew the cookie")
+		}
+		if touchErr != nil {
+			if err != nil || !session.ExpiresAt.Equal(result.ExpiresAt) {
+				t.Fatalf("failed touch changed original session: %+v, %v", session, err)
+			}
+		} else if !errors.Is(err, ErrSessionInvalid) {
+			t.Fatalf("revoked during touch: %v", err)
+		}
 	}
 }
 

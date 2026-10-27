@@ -132,7 +132,7 @@ func (s *Server) requireSession(w http.ResponseWriter, r *http.Request) (applica
 		writeRegistryError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return application.AuthSession{}, false
 	}
-	session, err := s.auth.Authenticate(r.Context(), cookie.Value)
+	session, err := s.authenticateSession(w, r, cookie.Value)
 	switch {
 	case err == nil:
 		return session, true
@@ -143,6 +143,14 @@ func (s *Server) requireSession(w http.ResponseWriter, r *http.Request) (applica
 		writeRegistryError(w, http.StatusInternalServerError, "internal_error", "internal error")
 	}
 	return application.AuthSession{}, false
+}
+
+func (s *Server) authenticateSession(w http.ResponseWriter, r *http.Request, token string) (application.AuthSession, error) {
+	session, err := s.auth.Authenticate(r.Context(), token)
+	if err == nil && session.Renewed {
+		s.setSessionCookie(w, r, token, session.ExpiresAt)
+	}
+	return session, err
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {

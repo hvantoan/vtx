@@ -158,6 +158,7 @@ func (s *AuthService) Authenticate(ctx context.Context, token string) (AuthSessi
 	}
 	session.LastSeenAt = now
 	session.ExpiresAt = expiresAt
+	session.Renewed = true
 	return session, nil
 }
 

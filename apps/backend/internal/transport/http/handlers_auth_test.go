@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -216,6 +217,67 @@ func TestMeRequiresASession(t *testing.T) {
 	rec := doAuth(t, handler, http.MethodGet, "/api/v1/auth/me", "", true, nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"username":"alice"`) {
 		t.Fatalf("me = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAuthenticatedRequestsRefreshOnlyRenewedCookies(t *testing.T) {
+	for _, path := range []string{"/api/v1/auth/me", "/api/v1/operator/overview", "/api/v1/events"} {
+		for _, mode := range []string{"auto", "always", "never"} {
+			for _, renewed := range []bool{false, true} {
+				t.Run(path+"/"+mode+"/"+fmt.Sprint(renewed), func(t *testing.T) {
+					auth := newFakeAuthService()
+					auth.session.ExpiresAt = time.Now().UTC().Add(application.SessionTTL).Truncate(time.Second)
+					auth.session.Renewed = renewed
+					cfg := authTestConfig()
+					cfg.SessionCookieSecure = mode
+					srv := NewServer(cfg, discardLogger(), nil, nil).WithAuth(auth).WithOperator(&fakeOperatorService{})
+					req := httptest.NewRequest(http.MethodGet, path, nil)
+					withTestSession(req)
+					if mode == "auto" {
+						req.Header.Set("X-Forwarded-Proto", "https")
+					}
+					// Stop SSE after authentication rather than waiting for a stream.
+					ctx, cancel := context.WithCancel(req.Context())
+					cancel()
+					rec := httptest.NewRecorder()
+					srv.Routes().ServeHTTP(rec, req.WithContext(ctx))
+					cookies := rec.Result().Cookies()
+					if !renewed {
+						if len(cookies) != 0 {
+							t.Fatalf("unchanged session reset cookie: %+v", cookies)
+						}
+						return
+					}
+					if len(cookies) != 1 {
+						t.Fatalf("renewed cookies = %+v", cookies)
+					}
+					cookie := cookies[0]
+					if cookie.Value != testSessionValue || !cookie.Expires.Equal(auth.session.ExpiresAt) || cookie.MaxAge <= 0 ||
+						!cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode || cookie.Secure != (mode != "never") {
+						t.Fatalf("renewed cookie = %+v", cookie)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestLoginUsesForwardedClientInsteadOfSharedProxyAddress(t *testing.T) {
+	auth := newFakeAuthService()
+	handler := authTestServer(auth)
+	for _, client := range []string{"192.0.2.1", "192.0.2.2"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"operator","password":"wrong"}`))
+		req.RemoteAddr = "10.0.0.2:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", client)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("login status = %d: %s", rec.Code, rec.Body)
+		}
+		if auth.lastLogin.clientKey != client {
+			t.Fatalf("client key = %q, want %q", auth.lastLogin.clientKey, client)
+		}
 	}
 }
 
